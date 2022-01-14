@@ -5,7 +5,7 @@ snrv
 [![codecov](https://codecov.io/gh/REPLACE_WITH_OWNER_ACCOUNT/snrv/branch/master/graph/badge.svg)](https://codecov.io/gh/REPLACE_WITH_OWNER_ACCOUNT/snrv/branch/master)
 
 
-State free (non-)reversible VAMPnets
+State-free (non-)reversible VAMPnets
 
 ### Requirements
 
