@@ -10,10 +10,8 @@ State-free (non-)reversible VAMPnets
 ### Requirements
 
 * numpy
-* scipy
-* scikit-learn
-* pytorch
-* etc.
+* torch
+* tqdm
 
 ### Installation
 
