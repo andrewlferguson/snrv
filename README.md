@@ -24,15 +24,43 @@ $ pip install -e .
 ```
 ### Examples
 
-Below is a quick start example that demonstrates basic usage of SNRVs.
+Below is a quick start minimal example.
 
-Additional examples are provided in the Jupyter notebooks in this repo.
+Additional examples are provided in the Jupyter example notebooks.
 
 ```python 
 import numpy as np
-from snrv import Snrv 
+import torch
+from snrv import Snrv, load_snrv
 
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+# generating sythetic trajectory data
+traj_x = np.random.randn(1000,1)
+traj_x = torch.from_numpy(traj_x).float()
+
+# initializing S(N)RV model
+input_size = traj_x.size()[1]
+output_size = 2
+n_epochs = 25
+is_reversible = False
+
+model = Snrv(input_size, output_size, n_epochs=n_epochs, is_reversible=is_reversible)
+model = model.to(device)
+
+# training model
+lag = 1
+model.fit(traj_x, lag)
+
+# extracting implied time scales
+its = -lag / np.log(model.evals.cpu().detach().numpy())
+
+# projecting traj_x into transfer operator eigenvector approximations
+psi = model.transform(traj_x)
+
+# saving and loading trained model
+model.save_model('model.pt')
+model_two = load_snrv('model.pt')
 ```
 
 ### Cite
