@@ -17,7 +17,10 @@ State-free (non-)reversible VAMPnets
 
 ```
 $ git clone https://github.com/andrewlferguson/snrv.git
-$ pip install ./snrv
+$ cd ./snrv
+$ pip install .
+OR
+$ pip install -e .
 ```
 ### Examples
 
@@ -27,9 +30,9 @@ Additional examples are provided in the Jupyter notebooks in this repo.
 
 ```python 
 import numpy as np
-from snrv import snrv 
+from snrv import Snrv 
 
-etc
+
 ```
 
 ### Cite
