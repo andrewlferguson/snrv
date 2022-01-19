@@ -1,8 +1,8 @@
 snrv
 ==============================
 [//]: # (Badges)
-[![GitHub Actions Build Status](https://github.com/REPLACE_WITH_OWNER_ACCOUNT/snrv/workflows/CI/badge.svg)](https://github.com/REPLACE_WITH_OWNER_ACCOUNT/snrv/actions?query=workflow%3ACI)
-[![codecov](https://codecov.io/gh/REPLACE_WITH_OWNER_ACCOUNT/snrv/branch/master/graph/badge.svg)](https://codecov.io/gh/REPLACE_WITH_OWNER_ACCOUNT/snrv/branch/master)
+[![GitHub Actions Build Status](https://github.com/andrewlferguson/snrv/workflows/CI/badge.svg)](https://github.com/andrewlferguson/snrv/actions?query=workflow%3ACI)
+[![codecov](https://codecov.io/gh/andrewlferguson/snrv/branch/master/graph/badge.svg)](https://codecov.io/gh/andrewlferguson/snrv/branch/master)
 
 
 State-free (non-)reversible VAMPnets
