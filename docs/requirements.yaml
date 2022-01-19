@@ -7,7 +7,7 @@ dependencies:
   - numpy
   - pytest
   - scipy
-  - torch
+  - pytorch
   - tqdm
 
 
