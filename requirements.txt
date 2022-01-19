@@ -1,4 +1,4 @@
-numpy>=1.21
+numpy>=1.19
 pytest>=6.2
 scipy>=1.3
 torch>=1.9

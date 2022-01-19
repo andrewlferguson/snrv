@@ -1,0 +1,14 @@
+name: snrv
+channels:
+  - pytorch
+  - omnia
+  - conda-forge
+  - mirror-test
+  - defaults
+dependencies:
+  - numpy=1.21
+  - scipy=1.7.3
+  - pytorch=1.10
+  - tqdm=4.62
+  - pytest=6.2
+prefix: /anaconda/envs/snrv

@@ -11,8 +11,25 @@ State-free (non-)reversible VAMPnets
 ### Requirements
 
 * numpy
+* scipy
 * torch
 * tqdm
+
+### Environments
+
+conda
+```
+$ conda env create --file requirements.yml
+$ source activate snrv
+```
+
+venv
+```
+$ pip install virtualenv
+$ python -m venv venv
+$ source venv/bin/activate
+$ python -m pip install -r requirements.txt
+```
 
 ### Installation
 
@@ -23,6 +40,7 @@ $ pip install .
 OR
 $ pip install -e .
 ```
+
 ### Examples
 
 Below is a quick start minimal example.
@@ -36,12 +54,22 @@ from snrv import Snrv, load_snrv
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-# generating sythetic trajectory data
-traj_x = np.random.randn(1000,1)
+# generating sythetic trajectory data: dim0 = observations, dim1 = features
+dim = 3
+
+# CASE 1: single trajectory
+traj_x = np.random.randn(1000,dim)
 traj_x = torch.from_numpy(traj_x).float()
 
+# CASE 2: multiple trajectories packed into list
+traj_x_1 = np.random.randn(1000,dim)
+traj_x_1 = torch.from_numpy(traj_x_1).float()
+traj_x_2 = np.random.randn(1000,dim)
+traj_x_2 = torch.from_numpy(traj_x_2).float()
+traj_x = [traj_x_1, traj_x_2]
+
 # initializing S(N)RV model
-input_size = traj_x.size()[1]
+input_size = dim
 output_size = 2
 n_epochs = 25
 is_reversible = False
