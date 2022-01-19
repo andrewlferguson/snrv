@@ -27,7 +27,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [macOS-latest, ubuntu-latest]
-        python-version: ["3.7"]
+        python-version: ["3.7", "3.9"]
 
     steps:
     - uses: actions/checkout@v2
@@ -48,4 +48,11 @@ jobs:
     #    flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
     - name: Test with pytest
       run: |
-        pytest
+        pytest -v --cov=snrv --cov-report=xml --color=yes snrv/tests/
+
+    - name: CodeCov
+      uses: codecov/codecov-action@v2
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-${{ matrix.os }}-py${{ matrix.python-version }}
