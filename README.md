@@ -2,6 +2,7 @@ snrv
 ==============================
 [//]: # (Badges)
 [![GitHub Actions Build Status](https://github.com/andrewlferguson/snrv/workflows/CI/badge.svg)](https://github.com/andrewlferguson/snrv/actions?query=workflow%3ACI)
+[![Documentation Status](https://readthedocs.org/projects/snrv/badge/?version=latest)](https://snrv.readthedocs.io/en/latest/?badge=latest)
 <!--- *Requires codecov.io account* [![codecov](https://codecov.io/gh/andrewlferguson/snrv/branch/master/graph/badge.svg)](https://codecov.io/gh/andrewlferguson/snrv/branch/master) --->
 
 
