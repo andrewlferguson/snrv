@@ -4,4 +4,7 @@ API Documentation
 .. autosummary::
    :toctree: autosummary
 
-   snrv.canvas
+   snrv
+   snrv.Snrv
+   snrv.DatasetSnrv
+   snrv.load_snrv

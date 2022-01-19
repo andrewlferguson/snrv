@@ -22,3 +22,4 @@ A configuration file for [Read The Docs](https://readthedocs.org/) (readthedocs.
 
 If you would like to use Read The Docs with `autodoc` (included automatically) and your package has dependencies, you will need to include those dependencies in your documentation yaml file (`docs/requirements.yaml`).
 
+Also need to update api.rst with list of all package components for which documentation should appear in index.
