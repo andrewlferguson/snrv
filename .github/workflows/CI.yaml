@@ -50,6 +50,7 @@ jobs:
       run: |
         pytest -v --cov=./ --cov-report=xml
 
+    # CodeCov account required for upload
     - name: CodeCov
       uses: codecov/codecov-action@v2
       with:
