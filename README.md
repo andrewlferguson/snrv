@@ -131,7 +131,7 @@ a target Hamiltonian from trajectories collected under a different, biased Hamil
 encountered when using enhanced sampling biasing techniques to enhance sampling of the phase space. Path weights
 must be computed from the biased trajectories and provided as an input to the code.
 
-An older TensorFlow 1.15 version of SNRVs and without path reweighting is available [here](https://github.com/hsidky/srv).
+An older TensorFlow 1.15 version of SNRVs without path reweighting is available [here](https://github.com/hsidky/srv).
 
 **S(N)RVs:**
 
@@ -148,7 +148,7 @@ Springer, Cham, 2020. 331-372. [doi: 10.1007/978-3-030-40245-7_16](https://doi.o
 * A. Mardt, L. Pasquali, H. Wu, and F. Noé "VAMPnets for deep learning of molecular kinetics" Nat. Commun. 9 5 (2018) 
 [doi: 10.1038/s41467-017-02388-1](https://doi.org/10.1038/s41467-017-02388-1)
 
-* Andrew, Galen, Raman Arora, Jeff Bilmes, and Karen Livescu. "Deep canonical correlation analysis." In International 
+* G. Andrew, R. Arora, J. Bilmes, and K. Livescu. "Deep canonical correlation analysis." In International 
 conference on machine learning, pp. 1247-1255. PMLR, (2013) [https://proceedings.mlr.press/v28/andrew13.html](https://proceedings.mlr.press/v28/andrew13.html)
 
 **VDE:**
