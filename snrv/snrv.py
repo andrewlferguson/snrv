@@ -3,7 +3,7 @@ if __name__ == "__main__":
     print('0')
 
 import numpy as np
-import os, sys
+import os
 
 import torch
 import torch.optim as optim
@@ -171,6 +171,9 @@ class Snrv(nn.Module):
     is_reversible : bool, default = True
         indicator flag as to whether to enforce detailed balance by symmetrizing trajectory by augmenting with time
         reversed twin and solve VAC OR not assume microscopic reversibility and solve VAMP
+
+    num_workers : int, default = 8
+        number of cpu workers to use for datalaoder
 
     Attributes
     ----------
