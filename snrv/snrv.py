@@ -3,6 +3,7 @@ if __name__ == "__main__":
     print('0')
 
 import numpy as np
+import os, sys
 
 import torch
 import torch.optim as optim
@@ -217,7 +218,7 @@ class Snrv(nn.Module):
 
     def __init__(self, input_size, output_size, hidden_depth=2, hidden_size=100, activation=nn.ReLU(), batch_norm=False,
                  dropout_rate=0., lr=0.1, weight_decay=0., val_frac=0.2, n_epochs=100, batch_size=100, VAMPdegree=2,
-                 is_reversible=True):
+                 is_reversible=True, num_workers=8):
 
         super().__init__()
 
@@ -238,6 +239,12 @@ class Snrv(nn.Module):
         self.batch_size = batch_size
         self.VAMPdegree = VAMPdegree
         self.is_reversible = is_reversible
+        
+        # optimize number of workers for data loading
+        if num_workers is None:
+            self.num_workers = min(os.cpu_count(), 8)
+        else:
+            self.num_workers = num_workers
 
         # building SNRV encoder as simple feedforward ANN
         self.layers = nn.ModuleList()
@@ -555,8 +562,10 @@ class Snrv(nn.Module):
         val_size = n - train_size
         train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
-        self._train_loader = DataLoader(dataset=train_dataset, batch_size=self.batch_size, shuffle=True)
-        self._val_loader = DataLoader(dataset=val_dataset, batch_size=self.batch_size, shuffle=True)
+        self._train_loader = DataLoader(dataset=train_dataset, batch_size=self.batch_size, 
+                                        shuffle=True, num_workers=self.num_workers)
+        self._val_loader = DataLoader(dataset=val_dataset, batch_size=self.batch_size, 
+                                      shuffle=True, num_workers=self.num_workers)
 
         return None
 
@@ -696,7 +705,7 @@ class Snrv(nn.Module):
 
         self.training_losses = training_losses
         self.validation_losses = validation_losses
-
+        
         self._compute_expansion_coefficients()
 
         self.is_fitted = True
@@ -732,13 +741,14 @@ class Snrv(nn.Module):
         C10 = torch.zeros(self.output_size, self.output_size).to(self.device)
         C11 = torch.zeros(self.output_size, self.output_size).to(self.device)
 
-        for x_t0_batch, x_tt_batch, pathweight_batch in self._train_loader:
-            x_t0_batch = x_t0_batch.to(self.device)
-            x_tt_batch = x_tt_batch.to(self.device)
-            pathweight_batch = pathweight_batch.to(self.device)
-            self.eval()
-            z_t0_batch, z_tt_batch = self(x_t0_batch, x_tt_batch)
-            C00, C01, C10, C11 = self._accumulate_correlation_matrices(z_t0_batch, z_tt_batch, pathweight_batch, C00, C01, C10, C11)
+        with torch.no_grad():
+            for x_t0_batch, x_tt_batch, pathweight_batch in self._train_loader:
+                x_t0_batch = x_t0_batch.to(self.device)
+                x_tt_batch = x_tt_batch.to(self.device)
+                pathweight_batch = pathweight_batch.to(self.device)
+                self.eval()
+                z_t0_batch, z_tt_batch = self(x_t0_batch, x_tt_batch)
+                C00, C01, C10, C11 = self._accumulate_correlation_matrices(z_t0_batch, z_tt_batch, pathweight_batch, C00, C01, C10, C11)
 
         if self.is_reversible:
 
@@ -800,9 +810,10 @@ class Snrv(nn.Module):
         """
 
         if self.is_fitted:
-            data = data.to(self.device)
-            z, _ = self(data, data)
-            psi = torch.matmul(z, self.expansion_coefficients)
+            with torch.no_grad():
+                data = data.to(self.device)
+                z, _ = self(data, data)
+                psi = torch.matmul(z, self.expansion_coefficients)
         else:
             raise RuntimeError('Model needs to be fit first.')
 
