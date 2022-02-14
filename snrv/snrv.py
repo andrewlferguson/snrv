@@ -352,7 +352,7 @@ class Snrv(nn.Module):
     @staticmethod
     def _gen_eig_chol(C, Q):
         """
-        Solution of symmetric generalized eigenvalue problem using Cholesky decomposition to convert to regular eigenvalue problem
+        Solution of symmetric generalized eigenvalue problem using Cholesky decomposition to convert to regular symmetric eigenvalue problem
         Ref: Sidky, Chen, Ferguson J. Chem. Phys. 150, 214114 (2019); doi: 10.1063/1.5092521
 
         C*v_i = w_i*Q*v_i (generalized eigenvalue problem)
@@ -387,9 +387,10 @@ class Snrv(nn.Module):
         LTinv = torch.linalg.inv(L.t())
 
         # Ctilde
+        # N.B. Ctilde guaranteed to be symmetric if C is symmetric: Let A = L^-1 * C * (L^T)^-1 = L^-1 * C * (L^-1)^T. A^T = [L^-1 * C * (L^-1)^T]^T = L^-1 * C^T * (L^-1)^T = A, if C = C^T
         Ctilde = torch.matmul(Linv, torch.matmul(C, LTinv))
 
-        # regular eigenvalue problem
+        # regular symmetric eigenvalue problem
         w, vtilde = torch.linalg.eigh(Ctilde)
 
         # correcting to generalized eigenvalue eigenvectors
