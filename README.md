@@ -123,7 +123,7 @@ Numerically, they share similarities with [VAMPnets](https://github.com/markovmo
 [variational dynamics encoders (VDE)](https://github.com/msmbuilder/vde). Whereas VAMPnets seek to provide an end-to-end
 replacement for learned state assigments and Markov state model (MSM) construction, SNRVs are designed to learn the slow 
 modes within a dynamical trajectory. VDEs are limited to learning a single slow mode due to the lack of orthogonality 
-constraints in the learned latedt space whereas SNRVs can scale to any dimensionality. 
+constraints in the learned latent space whereas SNRVs can scale to any dimensionality. 
 
 SNRVs also incorporate functionality to 
 perform path reweighting using the Girsanov formalism to estimate the slow modes under 
