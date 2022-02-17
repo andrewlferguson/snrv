@@ -96,7 +96,7 @@ class Snrv(nn.Module):
         optimizer for backpropagation
 
     self._train_step : function
-        training step function produced by self._make_train_step
+        training step function
 
     self.evals : torch.tensor, n_comp, n_comp = no. of basis functions in ANN == output_size
         eigenvalues of VAC generalized eigenvalue problem finding linear combination of learned basis functions to

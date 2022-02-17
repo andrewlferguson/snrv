@@ -151,7 +151,7 @@ def accumulate_correlation_matrices(z_t0, z_tt, pathweight, C00, C01, C10, C11):
     z_t0_r = torch.multiply(W, z_t0)
     C00 += torch.matmul(z_t0.t(), z_t0_r)
     C01 += torch.matmul(z_t0.t(), z_tt_r)
-    C10 += torch.matmul(z_tt_r.t(), z_t0)
+    C10 += torch.matmul(z_tt.t(), z_t0_r)
     C11 += torch.matmul(z_tt.t(), z_tt_r)
 
     return C00, C01, C10, C11
