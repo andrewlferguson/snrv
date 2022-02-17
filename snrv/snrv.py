@@ -588,10 +588,10 @@ class Snrv(nn.Module):
         """
 
         if self.is_fitted:
-            with torch.no_grad():
-                data = data.to(self.device)
-                z, _ = self(data, data)
-                psi = torch.matmul(z, self.expansion_coefficients)
+            #with torch.no_grad(): # need grad for get_transform_Jacobian to function
+            data = data.to(self.device)
+            z, _ = self(data, data)
+            psi = torch.matmul(z, self.expansion_coefficients)
         else:
             raise RuntimeError("Model needs to be fit first.")
 

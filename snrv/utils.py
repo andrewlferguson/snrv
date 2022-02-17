@@ -28,7 +28,7 @@ def stable_symmetric_inverse(A, ret_sqrt=False):
     B : torch.tensor
         stable inverse approximation to A^(-1) or A^(-0.5) depending on ret_sqrt flag
     """
-    assert torch.allclose(A, A.t(), atol=1e-6)
+    #assert torch.allclose(A, A.t(), atol=1e-6)
 
     w, V = torch.linalg.eigh(A)
 
@@ -73,8 +73,8 @@ def gen_eig_chol(C, Q):
     v : torch.tensor
         eigenvectors in non-ascending order
     """
-    assert torch.allclose(C, C.t(), atol=1e-6)
-    assert torch.allclose(Q, Q.t(), atol=1e-6)
+    #assert torch.allclose(C, C.t(), atol=1e-6)
+    #assert torch.allclose(Q, Q.t(), atol=1e-6)
 
     # Cholesky
     # N.B. torch.linalg.cholesky checks for Hermitian matrix automatically and throws runtime error if violated
