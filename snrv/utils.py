@@ -28,7 +28,7 @@ def stable_symmetric_inverse(A, ret_sqrt=False):
     B : torch.tensor
         stable inverse approximation to A^(-1) or A^(-0.5) depending on ret_sqrt flag
     """
-    assert torch.allclose(A, A.t())
+    assert torch.allclose(A, A.t(), atol=1e-6)
 
     w, V = torch.linalg.eigh(A)
 
