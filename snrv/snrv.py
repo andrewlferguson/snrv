@@ -1,6 +1,6 @@
 if __name__ == "__main__":
     # Do something if this file is invoked on its own
-    print('0')
+    print("0")
 
 import numpy as np
 import os
@@ -8,119 +8,19 @@ import os
 import torch
 import torch.optim as optim
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.dataset import random_split
+from torch.utils.data import DataLoader
 
 from tqdm import tqdm
 
-__all__ = ['DatasetSnrv', 'Snrv', 'load_snrv']
+from snrv.data import DatasetSnrv
+from snrv.utils import (
+    accumulate_correlation_matrices,
+    gen_eig_chol,
+    stable_symmetric_inverse,
+)
 
-
-class DatasetSnrv(Dataset):
-    """
-    Custom dataset for Snrv class
-
-    Parameters
-    ----------
-    data : float tensor (single traj) or list of float tensors (multi traj); dim 0 = steps, dim 1 = features
-        time-continuous trajectories
-
-    lag : int
-        lag in steps to apply to data trajectory
-
-    ln_pathweight : torch.tensor, n, n = observations
-        accumulated sum of the log Girsanov path weights between frames in the trajectory;
-            Girsanov theorem measure of the probability of the observed sample path under a target potential
-            relative to that which was actually observed under the simulation potential;
-            identically unity (no reweighting rqd) for target potential == simulation potential and code as None
-
-    Attributes
-    ----------
-    self.lag : int
-        lag in steps
-
-    self.x_t0 : float tensor, n x dim, n = observations, dim = dimensionality of trajectory featurization
-        non-time-lagged trajectory
-
-    self.x_tt : float tensor, n x dim, n = observations, dim = dimensionality of trajectory featurization
-        time-lagged trajectory
-
-    self.pathweight : float tensor, n = observations
-        pathweights from Girsanov theorem between time lagged observations;
-        identically unity (no reweighting rqd) for target potential == simulation potential;
-        if ln_pathweight == None => pathweight == ones
-    """
-
-    def __init__(self, data, lag, ln_pathweight):
-
-        self.lag = lag
-
-        if type(data) is list:
-
-            for ii in range(0, len(data)):
-                assert type(data[ii]) is torch.Tensor
-
-            if ln_pathweight is not None:
-                assert type(ln_pathweight) is list
-                assert len(data) == len(ln_pathweight)
-                for ii in range(0, len(ln_pathweight)):
-                    assert type(ln_pathweight[ii]) is torch.Tensor
-                    assert data[ii].size()[0] == ln_pathweight[ii].size()[0]
-
-            x_t0 = []
-            x_tt = []
-            pathweight = []
-
-            for ii in range(0, len(data)):
-                x_t0.append(data[ii][:-self.lag])
-                x_tt.append(data[ii][self.lag:])
-
-                K = data[ii][self.lag:].size()[0]
-                pathweight_ii = torch.ones(K)
-                if ln_pathweight is not None:
-                    for jj in range(0, K):
-                        arg = torch.sum(ln_pathweight[ii][jj + 1: jj + self.lag])
-                        pathweight_ii[jj] = torch.exp(arg)
-                pathweight.append(pathweight_ii)
-
-            x_t0 = torch.cat(x_t0, dim=0)
-            x_tt = torch.cat(x_tt, dim=0)
-            pathweight = torch.cat(pathweight, dim=0)
-
-        elif type(data) is torch.Tensor:
-
-            if ln_pathweight is not None:
-                assert type(ln_pathweight) is torch.Tensor
-                assert data.size()[0] == ln_pathweight.size()[0]
-
-            x_t0 = data[:-self.lag]
-            x_tt = data[self.lag:]
-
-            K = x_tt.size()[0]
-            pathweight = torch.ones(K)
-            if ln_pathweight is not None:
-                for ii in range(0, K):
-                    arg = torch.sum(ln_pathweight[ii + 1: ii + self.lag])
-                    pathweight[ii] = torch.exp(arg)
-
-        else:
-            raise TypeError(
-                "Data type %s is not supported; must be a float tensor (single traj) or list of float tensors (multi "
-                "traj)" % type(data))
-
-        self.x_t0 = x_t0
-        self.x_tt = x_tt
-        self.pathweight = pathweight
-
-    def __getitem__(self, index):
-        x_t0 = self.x_t0[index]
-        x_tt = self.x_tt[index]
-        pathweight = self.pathweight[index]
-        return x_t0, x_tt, pathweight
-
-    def __len__(self):
-        assert len(self.x_t0) == len(self.x_tt) == len(self.pathweight)
-        return len(self.x_t0)
+__all__ = ["Snrv", "load_snrv"]
 
 
 class Snrv(nn.Module):
@@ -219,13 +119,28 @@ class Snrv(nn.Module):
         loss over validation data in each epoch
     """
 
-    def __init__(self, input_size, output_size, hidden_depth=2, hidden_size=100, activation=nn.ReLU(), batch_norm=False,
-                 dropout_rate=0., lr=0.1, weight_decay=0., val_frac=0.2, n_epochs=100, batch_size=100, VAMPdegree=2,
-                 is_reversible=True, num_workers=8):
+    def __init__(
+        self,
+        input_size,
+        output_size,
+        hidden_depth=2,
+        hidden_size=100,
+        activation=nn.ReLU(),
+        batch_norm=False,
+        dropout_rate=0.0,
+        lr=0.1,
+        weight_decay=0.0,
+        val_frac=0.2,
+        n_epochs=100,
+        batch_size=100,
+        VAMPdegree=2,
+        is_reversible=True,
+        num_workers=8,
+    ):
 
         super().__init__()
 
-        assert 0. < val_frac < 1.
+        assert 0.0 < val_frac < 1.0
         assert isinstance(VAMPdegree, int) and VAMPdegree > 0
 
         self.input_size = input_size
@@ -242,7 +157,7 @@ class Snrv(nn.Module):
         self.batch_size = batch_size
         self.VAMPdegree = VAMPdegree
         self.is_reversible = is_reversible
-        
+
         # optimize number of workers for data loading
         if num_workers is None:
             self.num_workers = min(os.cpu_count(), 8)
@@ -250,30 +165,30 @@ class Snrv(nn.Module):
             self.num_workers = num_workers
 
         # building SNRV encoder as simple feedforward ANN
-        self.layers = nn.ModuleList()
-        self.layers.append(nn.Linear(self.input_size, self.hidden_size))
-        if self.dropout_rate > 0.:
-            self.layers.append(nn.Dropout(self.dropout_rate))
-        if self.batch_norm == True:
-            self.layers.append(nn.BatchNorm1d(self.hidden_size))
-        self.layers.append(self.activation)
+        self.model = list()
+        self.model.append(nn.Linear(self.input_size, self.hidden_size))
+        if self.dropout_rate > 0.0:
+            self.model.append(nn.Dropout(self.dropout_rate))
+        if self.batch_norm:
+            self.model.append(nn.BatchNorm1d(self.hidden_size))
+        self.model.append(self.activation)
         for k in range(hidden_depth - 1):
-            self.layers.append(nn.Linear(self.hidden_size, self.hidden_size))
-            if self.dropout_rate > 0.:
-                self.layers.append(nn.Dropout(self.dropout_rate))
-            if self.batch_norm == True:
-                self.layers.append(nn.BatchNorm1d(self.hidden_size))
-            self.layers.append(self.activation)
-        self.layers.append(nn.Linear(self.hidden_size, self.output_size))
+            self.model.append(nn.Linear(self.hidden_size, self.hidden_size))
+            if self.dropout_rate > 0.0:
+                self.model.append(nn.Dropout(self.dropout_rate))
+            if self.batch_norm:
+                self.model.append(nn.BatchNorm1d(self.hidden_size))
+            self.model.append(self.activation)
+        self.model.append(nn.Linear(self.hidden_size, self.output_size))
+        self.model = nn.Sequential(*self.model)
 
         # cached variables
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.is_fitted = False
         self._train_loader = None
         self._val_loader = None
         self.lag = None
         self.optimizer = None
-        self._train_step = None
         self.training_losses = None
         self.validation_losses = None
         self.evals = None
@@ -303,165 +218,13 @@ class Snrv(nn.Module):
         assert x_tt.size()[0] == x_t0.size()[0]
 
         # passing inputs through ANN to project into self.output_size basis vectors
-        for layer in self.layers:
-            x_t0 = layer(x_t0)
+        x_t0 = self.model(x_t0)
+        x_tt = self.model(x_tt)
 
-        for layer in self.layers:
-            x_tt = layer(x_tt)
-
-        return x_t0, x_tt  # really z_t0, z_tt resulting from passing x_t0, x_tt through network
-
-    @staticmethod
-    def _stable_symmetric_inverse(A, ret_sqrt=False):
-        """
-        Utility function to return stable inverse A^(-1) or sqrt of inverse A^(-0.5) of a symmetric matrix A
-        Ref.: https://github.com/markovmodel/deeptime
-
-        Proceeds by diagonalizing matrix, setting eigenvalues smaller than threshold to zero, performing operations
-        on diagonlized matrix, reprojecting back to original basis
-
-        Parameters
-        ----------
-        A : torch.tensor
-            symmetric matrix
-
-        ret_sqrt : bool, default = False
-            indicator flag as to whether to return square root of inverse
-
-        Return
-        ------
-        B : torch.tensor
-            stable inverse approximation to A^(-1) or A^(-0.5) depending on ret_sqrt flag
-        """
-        assert torch.allclose(A, A.t())
-
-        w, V = torch.linalg.eigh(A)
-
-        w_threshold = torch.zeros_like(w)
-        for ii in range(w.size()[0]):
-            if w[ii] > torch.finfo(torch.float32).eps:
-                w_threshold[ii] = w[ii]
-
-        if ret_sqrt:
-            B = torch.matmul(V, torch.matmul(torch.diag(w_threshold ** (-0.5)), V.t()))
-        else:
-            B = torch.matmul(V, torch.matmul(torch.diag(w_threshold ** (-1)), V.t()))
-
-        return B
-
-    @staticmethod
-    def _gen_eig_chol(C, Q):
-        """
-        Solution of symmetric generalized eigenvalue problem using Cholesky decomposition to convert to regular
-        symmetric eigenvalue problem
-        Ref: Sidky, Chen, Ferguson J. Chem. Phys. 150, 214114 (2019); doi: 10.1063/1.5092521
-
-        C*v_i = w_i*Q*v_i (generalized eigenvalue problem)
-
-        Q = L*LT
-        Ctilde = Linv*C*LTinv
-        vtilde_i = LT*v_i
-
-        Ctilde*vtilde_i = w_i*v_i (regular eigenvalue problem)
-        v_i = LTinv*vtilde_i
-
-        Parameters
-        ----------
-        C : torch.tensor
-            symmetric matrix
-
-        Q : torch.tensor
-            symmetric matrix
-
-        Return
-        ------
-        w : torch.tensor
-            eigenvalues in non-ascending order
-
-        v : torch.tensor
-            eigenvectors in non-ascending order
-        """
-        assert torch.allclose(C, C.t())
-        assert torch.allclose(Q, Q.t())
-
-        # Cholesky
-        L = torch.linalg.cholesky(Q)
-        Linv = torch.linalg.inv(L)
-        LTinv = torch.linalg.inv(L.t())
-
-        # Ctilde
-        # N.B. Ctilde guaranteed to be symmetric if C is symmetric:
-        # Let A = L^-1 * C * (L^T)^-1 = L^-1 * C * (L^-1)^T.
-        # A^T = [L^-1 * C * (L^-1)^T]^T = L^-1 * C^T * (L^-1)^T = A, if C = C^T
-        Ctilde = torch.matmul(Linv, torch.matmul(C, LTinv))
-
-        # regular symmetric eigenvalue problem
-        w, vtilde = torch.linalg.eigh(Ctilde)
-
-        # correcting to generalized eigenvalue eigenvectors
-        v = torch.matmul(LTinv, vtilde)
-
-        # reordering to non-ascending
-        w = torch.flip(w, [0])
-        v = torch.flip(v, [1])
-
-        return w, v
-
-    @staticmethod
-    def _accumulate_correlation_matrices(z_t0, z_tt, pathweight, C00, C01, C10, C11):
-        """
-        Accumulating instantaneous and time-lagged correlations in z_t0 and z_tt into pre-existing C00, C01, C10, C11
-
-        Parameters
-        ----------
-        z_t0 : torch.tensor, n x n_comp, n = observations, n_comp = number of basis functions produced by network
-            trajectory projected into basis functions learned by SNRV encoder
-
-        z_tt : torch.tensor, n x n_comp, n = observations, n_comp = number of basis functions produced by network
-            time-lagged trajectory of same length as trajectory projected into basis functions learned by SNRV encoder
-
-        pathweight : float tensor, n = observations
-            pathweights from Girsanov theorem between time lagged observations;
-            identically unity (no reweighting rqd) for target potential == simulation potential
-
-        C00 : torch.tensor, n_comp x n_comp
-            correlation of z_t0 with z_t0
-
-        C01 : torch.tensor, n_comp x n_comp
-            correlation of z_t0 with z_tt
-
-        C10 : torch.tensor, n_comp x n_comp
-            correlation of z_tt with z_t0
-
-        C11 : torch.tensor, n_comp x n_comp
-            correlation of z_tt with z_tt
-
-        Return
-        ------
-        C00 : torch.tensor, n_comp x n_comp
-            correlation of z_t0 with z_t0
-
-        C01 : torch.tensor, n_comp x n_comp
-            correlation of z_t0 with z_tt
-
-        C10 : torch.tensor, n_comp x n_comp
-            correlation of z_tt with z_t0
-
-        C11 : torch.tensor, n_comp x n_comp
-            correlation of z_tt with z_tt
-        """
-
-        assert z_t0.size()[0] == z_tt.size()[0] == pathweight.size()[0]
-        assert z_t0.size()[1] == z_tt.size()[1]
-
-        W = torch.tile(torch.reshape(pathweight, (-1, 1)), (1, z_tt.size()[1]))
-        z_tt_r = torch.multiply(W, z_tt)
-        C00 += torch.matmul(z_t0.t(), z_t0)
-        C01 += torch.matmul(z_t0.t(), z_tt_r)
-        C10 += torch.matmul(z_tt_r.t(), z_t0)
-        C11 += torch.matmul(z_tt.t(), z_tt)
-
-        return C00, C01, C10, C11
+        return (
+            x_t0,
+            x_tt,
+        )  # really z_t0, z_tt resulting from passing x_t0, x_tt through network
 
     def _loss_fn(self, z_t0, z_tt, pathweight):
         """
@@ -482,7 +245,8 @@ class Snrv(nn.Module):
         Return
         ------
         loss : float
-            negative squared sum of eigenvalues from solving VAC generalized eigenvalue problem OR VAMP singular value problem
+            negative squared sum of eigenvalues from solving VAC generalized eigenvalue
+            problem OR VAMP singular value problem
         """
 
         assert z_t0.size()[0] == z_tt.size()[0] == pathweight.size()[0]
@@ -493,11 +257,13 @@ class Snrv(nn.Module):
         dim = z_t0.size()[1]
 
         # - accumulating correlation matrices
-        C00 = torch.zeros(dim, dim).to(self.device)
-        C01 = torch.zeros(dim, dim).to(self.device)
-        C10 = torch.zeros(dim, dim).to(self.device)
-        C11 = torch.zeros(dim, dim).to(self.device)
-        C00, C01, C10, C11 = self._accumulate_correlation_matrices(z_t0, z_tt, pathweight, C00, C01, C10, C11)
+        C00 = torch.zeros(dim, dim, device=self.device)
+        C01 = torch.zeros(dim, dim, device=self.device)
+        C10 = torch.zeros(dim, dim, device=self.device)
+        C11 = torch.zeros(dim, dim, device=self.device)
+        C00, C01, C10, C11 = accumulate_correlation_matrices(
+            z_t0, z_tt, pathweight, C00, C01, C10, C11
+        )
 
         if self.is_reversible:
 
@@ -512,7 +278,7 @@ class Snrv(nn.Module):
             # Q += torch.eye(Q.size()[0], dtype=torch.float, requires_grad=False)*torch.finfo(torch.float32).eps
 
             # solving generalized eigenvalue problem Cv = wQv using Cholesky trick to enable backpropagation
-            evals, _ = self._gen_eig_chol(C, Q)
+            evals, _ = gen_eig_chol(C, Q)
 
             # loss
             loss = -(evals ** self.VAMPdegree).sum()
@@ -523,8 +289,8 @@ class Snrv(nn.Module):
             # Ref.: Noe arXiv:1812.07669v1, Algorithm 4
 
             # - assembling balanced propagator (Eqn. 34)
-            C00invhalf = self._stable_symmetric_inverse(C00, ret_sqrt=True)
-            C11invhalf = self._stable_symmetric_inverse(C11, ret_sqrt=True)
+            C00invhalf = stable_symmetric_inverse(C00, ret_sqrt=True)
+            C11invhalf = stable_symmetric_inverse(C11, ret_sqrt=True)
 
             P = torch.matmul(C00invhalf, torch.matmul(C01, C11invhalf))
 
@@ -532,15 +298,15 @@ class Snrv(nn.Module):
             Up, S, VpT = torch.linalg.svd(P)
 
             # - projecting singular values back to original (non-balanced) propagator
-            #U = torch.matmul(C00invhalf, Up)
-            #V = torch.matmul(C11invhalf, VpT.t())
+            # U = torch.matmul(C00invhalf, Up)
+            # V = torch.matmul(C11invhalf, VpT.t())
 
             # loss
             loss = -(S ** self.VAMPdegree).sum()
 
         return loss
 
-    def _create_dataset(self, data, ln_pathweight):
+    def _create_dataset(self, data, ln_dynamical_weight, thermo_weight):
         """
         create training and validation data loader
 
@@ -564,65 +330,57 @@ class Snrv(nn.Module):
         self._val_loader : torch DataLoader
             validation data loader
         """
-        dataset = DatasetSnrv(data, self.lag, ln_pathweight)
+        dataset = DatasetSnrv(data, self.lag, ln_dynamical_weight, thermo_weight)
 
-        n = dataset.__len__()
+        n = len(dataset)
         train_size = int((1.0 - self.val_frac) * n)
         val_size = n - train_size
         train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
-        self._train_loader = DataLoader(dataset=train_dataset, batch_size=self.batch_size, 
-                                        shuffle=True, num_workers=self.num_workers)
-        self._val_loader = DataLoader(dataset=val_dataset, batch_size=self.batch_size, 
-                                      shuffle=True, num_workers=self.num_workers)
+        self._train_loader = DataLoader(
+            dataset=train_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+        )
+        self._val_loader = DataLoader(
+            dataset=val_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+        )
 
         return None
 
-    def _make_train_step(self):
+    def _train_step(self, x_t0, x_tt, pathweight):
         """
-        defining model training step
+        model training step
 
         Parameters
         ----------
+        x_t0: torch.tensor, n x dim, n = observations, dim = dimensionality of trajectory featurization
+            trajectory
+
+        x_tt: torch.tensor, n x dim, n = observations, dim = dimensionality of trajectory featurization
+            time-lagged trajectory of same length as trajectory
+
+        pathweight : float tensor, n = observations
+            pathweights from Girsanov theorem between time lagged observations;
+            identically unity (no reweighting rqd) for target potential == simulation potential
 
         Return
         ------
-        _train_step : function
-            definition of a single training step of the model
+        loss.item() : float
+            network loss over x_t0 and x_tt mini batch extracted as a float
         """
+        z_t0, z_tt = self(x_t0, x_tt)
+        loss = self._loss_fn(z_t0, z_tt, pathweight)
+        loss.backward()
+        self.optimizer.step()
+        self.optimizer.zero_grad()
+        return loss.item()
 
-        def _train_step(x_t0, x_tt, pathweight):
-            """
-            model training step
-
-            Parameters
-            ----------
-            x_t0: torch.tensor, n x dim, n = observations, dim = dimensionality of trajectory featurization
-                trajectory
-
-            x_tt: torch.tensor, n x dim, n = observations, dim = dimensionality of trajectory featurization
-                time-lagged trajectory of same length as trajectory
-
-            pathweight : float tensor, n = observations
-                pathweights from Girsanov theorem between time lagged observations;
-                identically unity (no reweighting rqd) for target potential == simulation potential
-
-            Return
-            ------
-            loss.item() : float
-                network loss over x_t0 and x_tt mini batch extracted as a float
-            """
-            self.train()
-            z_t0, z_tt = self(x_t0, x_tt)
-            loss = self._loss_fn(z_t0, z_tt, pathweight)
-            loss.backward()
-            self.optimizer.step()
-            self.optimizer.zero_grad()
-            return loss.item()
-
-        return _train_step
-
-    def fit(self, data, lag, ln_pathweight=None):
+    def fit(self, data, lag, ln_dynamical_weight=None, thermo_weight=None):
         """
         fit SNRV model to data
 
@@ -634,12 +392,15 @@ class Snrv(nn.Module):
         lag : int
             lag in steps to apply to data trajectory
 
-        ln_pathweight : torch.tensor, n, n = observations, default = None
+        ln_dynamical_weight : torch.tensor, n, n = observations, default = None
             accumulated sum of the log Girsanov path weights between frames in the trajectory;
             Girsanov theorem measure of the probability of the observed sample path under a target potential
             relative to that which was actually observed under the simulation potential;
             identically unity (no reweighting rqd) for target potential == simulation potential and code as None;
             Ref.: Kieninger and Keller J. Chem. Phys 154 094102 (2021)  https://doi.org/10.1063/5.0038408
+
+        thermo_weight : torch.tensor, n, n = observations
+            thermodynamic weights for each trajectory frame
 
         Return
         ------
@@ -673,20 +434,22 @@ class Snrv(nn.Module):
         assert isinstance(lag, int) and lag >= 1
 
         self.lag = lag
-        self._create_dataset(data, ln_pathweight)
-        self.optimizer = optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
-        self._train_step = self._make_train_step()
+        self._create_dataset(data, ln_dynamical_weight, thermo_weight)
+        self.optimizer = optim.Adam(
+            self.parameters(), lr=self.lr, weight_decay=self.weight_decay
+        )
 
-        training_losses = []
-        validation_losses = []
+        training_losses = list()
+        validation_losses = list()
 
         for epoch in range(self.n_epochs):
 
             with tqdm(self._train_loader, unit="batch") as tepoch:
-                train_losses = []
+
+                self.train()
+                train_losses = list()
                 for x_t0_batch, x_tt_batch, pathweight_batch in tepoch:
                     tepoch.set_description("Epoch %d" % epoch)
-                    self.train()
                     x_t0_batch = x_t0_batch.to(self.device)
                     x_tt_batch = x_tt_batch.to(self.device)
                     pathweight_batch = pathweight_batch.to(self.device)
@@ -695,26 +458,30 @@ class Snrv(nn.Module):
                 training_loss = float(np.mean(train_losses))
                 training_losses.append(training_loss)
 
+                self.eval()
                 with torch.no_grad():
                     val_losses = []
                     for x_t0_batch, x_tt_batch, pathweight_batch in self._val_loader:
                         x_t0_batch = x_t0_batch.to(self.device)
                         x_tt_batch = x_tt_batch.to(self.device)
                         pathweight_batch = pathweight_batch.to(self.device)
-                        self.eval()
                         z_t0_batch, z_tt_batch = self(x_t0_batch, x_tt_batch)
-                        val_loss = self._loss_fn(z_t0_batch, z_tt_batch, pathweight_batch)
+                        val_loss = self._loss_fn(
+                            z_t0_batch, z_tt_batch, pathweight_batch
+                        )
                         val_loss = val_loss.item()
                         val_losses.append(val_loss)
                     validation_loss = float(np.mean(val_losses))
                     validation_losses.append(validation_loss)
 
-                print("[Epoch %d]\t training loss = %.3f\t validation loss = %.3f" % (
-                    epoch, training_loss, validation_loss))
+                print(
+                    "[Epoch %d]\t training loss = %.3f\t validation loss = %.3f"
+                    % (epoch, training_loss, validation_loss)
+                )
 
         self.training_losses = training_losses
         self.validation_losses = validation_losses
-        
+
         self._compute_expansion_coefficients()
 
         self.is_fitted = True
@@ -745,19 +512,21 @@ class Snrv(nn.Module):
             singular vectors (non-reversible)
         """
 
-        C00 = torch.zeros(self.output_size, self.output_size).to(self.device)
-        C01 = torch.zeros(self.output_size, self.output_size).to(self.device)
-        C10 = torch.zeros(self.output_size, self.output_size).to(self.device)
-        C11 = torch.zeros(self.output_size, self.output_size).to(self.device)
+        C00 = torch.zeros(self.output_size, self.output_size, device=self.device)
+        C01 = torch.zeros(self.output_size, self.output_size, device=self.device)
+        C10 = torch.zeros(self.output_size, self.output_size, device=self.device)
+        C11 = torch.zeros(self.output_size, self.output_size, device=self.device)
 
+        self.eval()
         with torch.no_grad():
             for x_t0_batch, x_tt_batch, pathweight_batch in self._train_loader:
                 x_t0_batch = x_t0_batch.to(self.device)
                 x_tt_batch = x_tt_batch.to(self.device)
                 pathweight_batch = pathweight_batch.to(self.device)
-                self.eval()
                 z_t0_batch, z_tt_batch = self(x_t0_batch, x_tt_batch)
-                C00, C01, C10, C11 = self._accumulate_correlation_matrices(z_t0_batch, z_tt_batch, pathweight_batch, C00, C01, C10, C11)
+                C00, C01, C10, C11 = accumulate_correlation_matrices(
+                    z_t0_batch, z_tt_batch, pathweight_batch, C00, C01, C10, C11
+                )
 
         if self.is_reversible:
 
@@ -774,7 +543,7 @@ class Snrv(nn.Module):
             # solving generalized eigenvalue problem Cv = wQv using Cholesky trick to enable backpropagation
             # - column evecs are the expansion coefficients to assemble transfer operator eigenvector / singluar vector
             # approximations from learned SNRV basis functions
-            evals, expansion_coefficients = self._gen_eig_chol(C, Q)
+            evals, expansion_coefficients = gen_eig_chol(C, Q)
 
             self.evals = evals
             self.expansion_coefficients = expansion_coefficients
@@ -785,8 +554,8 @@ class Snrv(nn.Module):
             # Ref.: Noe arXiv:1812.07669v1, Algorithm 4
 
             # - assembling balanced propagator (Eqn. 34)
-            C00invhalf = self._stable_symmetric_inverse(C00, ret_sqrt=True)
-            C11invhalf = self._stable_symmetric_inverse(C11, ret_sqrt=True)
+            C00invhalf = stable_symmetric_inverse(C00, ret_sqrt=True)
+            C11invhalf = stable_symmetric_inverse(C11, ret_sqrt=True)
 
             P = torch.matmul(C00invhalf, torch.matmul(C01, C11invhalf))
 
@@ -824,13 +593,14 @@ class Snrv(nn.Module):
                 z, _ = self(data, data)
                 psi = torch.matmul(z, self.expansion_coefficients)
         else:
-            raise RuntimeError('Model needs to be fit first.')
+            raise RuntimeError("Model needs to be fit first.")
 
         return psi
 
-    def fit_transform(self, data, lag, ln_pathweight=None):
+    def fit_transform(self, data, lag, ln_dynamical_weight=None, thermo_weight=None):
         """
-        fit SNRV over data then project data into learned eigenvector (VAC) / singular vectors (VAMP) of transfer operator
+        fit SNRV over data then project data into learned eigenvector (VAC) / singular vectors (VAMP)
+        of transfer operator
 
         Parameters
         ----------
@@ -840,12 +610,15 @@ class Snrv(nn.Module):
         lag : int
             lag in steps to apply to data trajectory
 
-        ln_pathweight : torch.tensor, n, n = observations, default = None
+        ln_dynamical_weight : torch.tensor, n, n = observations, default = None
             accumulated sum of the log Girsanov path weights between frames in the trajectory;
             Girsanov theorem measure of the probability of the observed sample path under a target potential
             relative to that which was actually observed under the simulation potential;
             identically unity (no reweighting rqd) for target potential == simulation potential and code as None;
             Ref.: Kieninger and Keller J. Chem. Phys 154 094102 (2021)  https://doi.org/10.1063/5.0038408
+
+        thermo_weight : torch.tensor, n, n = observations
+            thermodynamic weights for each trajectory frame
 
         Return
         ------
@@ -882,7 +655,12 @@ class Snrv(nn.Module):
         assert isinstance(lag, int) and lag >= 1
 
         self.lag = lag
-        self.fit(data, self.lag, ln_pathweight=ln_pathweight)
+        self.fit(
+            data,
+            self.lag,
+            ln_dynamical_weight=ln_dynamical_weight,
+            thermo_weight=thermo_weight,
+        )
         psi = self.transform(data)
 
         return psi
@@ -909,7 +687,7 @@ class Snrv(nn.Module):
 
         if not self.is_fitted:
 
-            raise RuntimeError('Model needs to be fit first.')
+            raise RuntimeError("Model needs to be fit first.")
 
         else:
 
@@ -934,7 +712,7 @@ class Snrv(nn.Module):
                 grad_mask_matrix = torch.tile(grad_mask, (n, 1)).to(self.device)
 
                 # - zeroing gradients
-                if hasattr(data.grad, 'data'):
+                if hasattr(data.grad, "data"):
                     _ = data.grad.data.zero_()
 
                 # - backward pass
@@ -957,25 +735,28 @@ class Snrv(nn.Module):
         Return
         ------
         """
-        torch.save({'input_size': self.input_size,
-                    'output_size': self.output_size,
-                    'hidden_depth': self.hidden_depth,
-                    'hidden_size': self.hidden_size,
-                    'activation': self.activation,
-                    'batch_norm': self.batch_norm,
-                    'dropout_rate': self.dropout_rate,
-                    'lr': self.lr,
-                    'weight_decay': self.weight_decay,
-                    'val_frac': self.val_frac,
-                    'n_epochs': self.n_epochs,
-                    'batch_size': self.batch_size,
-                    'VAMPdegree': self.VAMPdegree,
-                    'is_reversible' : self.is_reversible,
-                    'evals': self.evals,
-                    'expansion_coefficients': self.expansion_coefficients,
-                    'network_weights': self.state_dict()
-                    },
-                   modelFilePath)
+        torch.save(
+            {
+                "input_size": self.input_size,
+                "output_size": self.output_size,
+                "hidden_depth": self.hidden_depth,
+                "hidden_size": self.hidden_size,
+                "activation": self.activation,
+                "batch_norm": self.batch_norm,
+                "dropout_rate": self.dropout_rate,
+                "lr": self.lr,
+                "weight_decay": self.weight_decay,
+                "val_frac": self.val_frac,
+                "n_epochs": self.n_epochs,
+                "batch_size": self.batch_size,
+                "VAMPdegree": self.VAMPdegree,
+                "is_reversible": self.is_reversible,
+                "evals": self.evals,
+                "expansion_coefficients": self.expansion_coefficients,
+                "network_weights": self.state_dict(),
+            },
+            modelFilePath,
+        )
 
         return None
 
@@ -1015,35 +796,47 @@ def load_snrv(modelFilePath):
     """
     d = torch.load(modelFilePath)
 
-    input_size = d['input_size']
-    output_size = d['output_size']
-    hidden_depth = d['hidden_depth']
-    hidden_size = d['hidden_size']
-    activation = d['activation']
-    batch_norm = d['batch_norm']
-    dropout_rate = d['dropout_rate']
-    lr = d['lr']
-    weight_decay = d['weight_decay']
-    val_frac = d['val_frac']
-    n_epochs = d['n_epochs']
-    batch_size = d['batch_size']
-    VAMPdegree = d['VAMPdegree']
-    is_reversible = d['is_reversible']
+    input_size = d["input_size"]
+    output_size = d["output_size"]
+    hidden_depth = d["hidden_depth"]
+    hidden_size = d["hidden_size"]
+    activation = d["activation"]
+    batch_norm = d["batch_norm"]
+    dropout_rate = d["dropout_rate"]
+    lr = d["lr"]
+    weight_decay = d["weight_decay"]
+    val_frac = d["val_frac"]
+    n_epochs = d["n_epochs"]
+    batch_size = d["batch_size"]
+    VAMPdegree = d["VAMPdegree"]
+    is_reversible = d["is_reversible"]
 
-    evals = d['evals']
-    expansion_coefficients = d['expansion_coefficients']
-    network_weights = d['network_weights']
+    evals = d["evals"]
+    expansion_coefficients = d["expansion_coefficients"]
+    network_weights = d["network_weights"]
 
-    model = Snrv(input_size, output_size, hidden_depth=hidden_depth, hidden_size=hidden_size, activation=activation,
-                batch_norm=batch_norm, dropout_rate=dropout_rate, lr=lr, weight_decay=weight_decay,
-                val_frac=val_frac, n_epochs=n_epochs, batch_size=batch_size, VAMPdegree=VAMPdegree,
-                is_reversible=is_reversible)
+    model = Snrv(
+        input_size,
+        output_size,
+        hidden_depth=hidden_depth,
+        hidden_size=hidden_size,
+        activation=activation,
+        batch_norm=batch_norm,
+        dropout_rate=dropout_rate,
+        lr=lr,
+        weight_decay=weight_decay,
+        val_frac=val_frac,
+        n_epochs=n_epochs,
+        batch_size=batch_size,
+        VAMPdegree=VAMPdegree,
+        is_reversible=is_reversible,
+    )
 
     model.evals = evals
     model.expansion_coefficients = expansion_coefficients
     model.load_weights(network_weights)
 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
 
     return model
