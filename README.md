@@ -163,6 +163,17 @@ Phys. Rev. E 97 6 062412 (2018) [doi: 10.1103/PhysRevE.97.062412](https://doi.or
 
 * J.K. Weber and V.S. Pande "Potential-based dynamical reweighting for Markov state models of protein dynamics" J. Chem. Theory Comput. 11 6 2412–2420 (2015) [doi: 10.1021/acs.jctc.5b00031](https://doi.org/10.1021/acs.jctc.5b00031)
 
+* L. Donati, C. Hartmann, and B.G. Keller "Girsanov reweighting for path ensembles and Markov state models" J. Chem. Phys. 146 244112 (2017)
+[doi: 10.1063/1.4989474](http://dx.doi.org/10.1063/1.4989474)
+
+* L. Donati and B.G. Keller "Girsanov reweighting for metadynamics simulations" J. Chem. Phys. 149 072335 (2018)
+[doi: 10.1063/1.5027728](https://doi.org/10.1063/1.5027728)
+
+**Koopman reweighting:**
+
+* H. Wu, F. Nüske, F. Paul, S. Klus, P. Koltai, and F. Noé "Variational Koopman models: Slow collective variables and molecular kinetics from short off-equilibrium simulations" J. Chem. Phys. 
+146 154104 (2017) [doi: 10.1063/1.4979344](http://dx.doi.org/10.1063/1.4979344) 
+
 **Package structure:**
 
 * Based on [Computational Molecular Science Python Cookiecutter](https://github.com/molssi/cookiecutter-cms) version 1.6.

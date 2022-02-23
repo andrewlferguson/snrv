@@ -75,6 +75,12 @@ class Snrv(nn.Module):
     num_workers : int, default = 8
         number of cpu workers to use for datalaoder
 
+    use_Koopman : bool, default = False
+        apply Koopman reweighting to approxiately reweight non-equilibrium data to equilibrium distribution
+        **N.B. Can be beneficial to pre-train a model w/out Koopman reweighting prior to turning this on in order
+        to get good initial basis function approximations, using Koopman reweighting in early stages of training can
+        lead to numerical instabilities**
+
     Attributes
     ----------
     self.device : str
@@ -136,6 +142,7 @@ class Snrv(nn.Module):
         VAMPdegree=2,
         is_reversible=True,
         num_workers=8,
+        use_Koopman=False,
     ):
 
         super().__init__()
@@ -157,12 +164,11 @@ class Snrv(nn.Module):
         self.batch_size = batch_size
         self.VAMPdegree = VAMPdegree
         self.is_reversible = is_reversible
-
-        # optimize number of workers for data loading
         if num_workers is None:
             self.num_workers = min(os.cpu_count(), 8)
         else:
             self.num_workers = num_workers
+        self.use_Koopman = use_Koopman
 
         # building SNRV encoder as simple feedforward ANN
         self.model = list()
@@ -265,6 +271,9 @@ class Snrv(nn.Module):
             z_t0, z_tt, pathweight, C00, C01, C10, C11
         )
 
+        if self.use_Koopman:
+            C00, C01, C10, C11 = self._apply_Koopman_reweighting(C00, C01, z_t0, z_tt, pathweight)
+
         if self.is_reversible:
 
             # VAC
@@ -274,7 +283,7 @@ class Snrv(nn.Module):
             Q = 0.5 * (C00 + C11)
             C = 0.5 * (C01 + C10)
 
-            # - applying regularization (nugget regularization of unpopulated bins with pseudocounts)
+            # - applying nugget regularization
             # Q += torch.eye(Q.size()[0], dtype=torch.float, requires_grad=False)*torch.finfo(torch.float32).eps
 
             # solving generalized eigenvalue problem Cv = wQv using Cholesky trick to enable backpropagation
@@ -305,6 +314,103 @@ class Snrv(nn.Module):
             loss = -(S ** self.VAMPdegree).sum()
 
         return loss
+
+    def _apply_Koopman_reweighting(self, C00, C01, z_t0, z_tt, pathweight):
+        """
+        re-compute C00, C01, C10, C11 under Koopman reweighting
+        Ref: Wu, Nüske, Paul, Klus, Koltai, and Noé J. Chem. Phys. 146 154104 (2017) 10.1063/1.4979344
+
+        Koopman reweighting proceeds in four steps:
+        (1) compute non-reversible/non-symmetrized C00 and C01; can be done w/ or w/out Girsanov reweighting:
+            w/out corresponds to equilibrium reweighting of simulation, w/ to equilibrium reweighting of Girsanov
+            reweighted simulation
+        (2) estimate reweighting vector as leading evec with unit eval of matrix
+            P = C00inv @ C01.t() @ C00inv.t() @ C00
+        (3) compute Koopman weights associated with each frame in trajectory
+        (4) re-compute C00, C01, C10, C11 under Girsanov and Koopman reweighting
+
+        Parameters
+        ----------
+        C00 : torch.tensor, n_comp x n_comp
+            correlation of z_t0 with z_t0 w/ Girsanov reweighting but w/out Koopman reweighting
+
+        C01 : torch.tensor, n_comp x n_comp
+            correlation of z_t0 with z_tt w/ Girsanov reweighting but w/out Koopman reweighting
+
+        z_t0 : torch.tensor, n x n_comp, n = observations, n_comp = number of basis functions produced by network
+            trajectory projected into basis functions learned by SNRV encoder
+
+        z_tt : torch.tensor, n x n_comp, n = observations, n_comp = number of basis functions produced by network
+            time-lagged trajectory of same length as trajectory projected into basis functions learned by SNRV encoder
+
+        pathweight : float tensor, n = observations
+            pathweights from Girsanov theorem between time lagged observations;
+            identically unity (no reweighting rqd) for target potential == simulation potential
+
+        Return
+        ------
+        C00 : torch.tensor, n_comp x n_comp
+            correlation of z_t0 with z_t0 w/ Girsanov and Koopman reweighting
+
+        C01 : torch.tensor, n_comp x n_comp
+            correlation of z_t0 with z_tt w/ Girsanov and Koopman reweighting
+
+        C10 : torch.tensor, n_comp x n_comp
+            correlation of z_tt with z_t0 w/ Girsanov and Koopman reweighting
+
+        C11 : torch.tensor, n_comp x n_comp
+            correlation of z_tt with z_tt w/ Girsanov and Koopman reweighting
+        """
+        # (1) non-reversible C00 and C01 under Girsanov reweighting provided as arguments
+
+        # (2) solving Koopman eigenvalue problem for reweighting vector
+
+        # - applying nugget regularization
+        C00 += torch.eye(C00.size()[0], dtype=torch.float, requires_grad=False) * torch.finfo(torch.float32).eps
+        # C01 += torch.eye(C01.size()[0], dtype=torch.float, requires_grad=False) * torch.finfo(torch.float32).eps
+
+        # - forming and solving Koopman eigenvalue problem
+        C00inv = torch.linalg.inv(C00)
+        P = C00inv @ C01.t() @ C00inv.t() @ C00
+
+        evals_P, evecs_P = torch.linalg.eig(P)
+
+        idx = torch.argsort(torch.real(evals_P), descending=True)
+        evals_P = evals_P[idx]
+        evecs_P = evecs_P[:, idx]
+
+        # - checking and extracting leading eigenvector with unit eigenvalue and zero imaginary components
+        assert torch.isclose(torch.real(evals_P[0]), torch.tensor(1.), rtol=0., atol=0.1)
+        assert torch.isclose(torch.imag(evals_P[0]), torch.tensor(0.), rtol=0., atol=0.1)
+
+        assert torch.allclose(torch.imag(evecs_P[:, 0]), torch.zeros(evecs_P.size()[0]), rtol=0., atol=0.1)
+
+        u = torch.real(evecs_P[:, 0])
+
+        # normalization not required -- amounts to multiplication of C00, C01 by a scalar
+        # u_norm = torch.ones(traj_indicator_0.shape[0]).t() @ torch.from_numpy(traj_indicator_0).float() @ u
+        # u /= u_norm
+        # assert torch.isclose(torch.sum(torch.from_numpy(traj_indicator_0).float() @ u), torch.tensor(1.))
+
+        # (3) computing Koopman weights
+        koopweight = torch.matmul(z_t0, u)
+
+        # - checking koopweight single signed and flipping to positive if necessary
+        assert torch.all(koopweight >= 0) or torch.all(koopweight <= 0)
+        if torch.all(koopweight <= 0):
+            koopweight = -koopweight
+
+        # (4) re-computing C00, C01, C10, C11 under Girsanov and Koopman reweighting
+        dim = z_t0.size()[1]
+        C00 = torch.zeros(dim, dim, device=self.device)
+        C01 = torch.zeros(dim, dim, device=self.device)
+        C10 = torch.zeros(dim, dim, device=self.device)
+        C11 = torch.zeros(dim, dim, device=self.device)
+        C00, C01, C10, C11 = accumulate_correlation_matrices(
+            z_t0, z_tt, torch.multiply(pathweight, koopweight), C00, C01, C10, C11
+        )
+
+        return C00, C01, C10, C11
 
     def _create_dataset(self, data, ln_dynamical_weight, thermo_weight):
         """
@@ -400,7 +506,10 @@ class Snrv(nn.Module):
             Ref.: Kieninger and Keller J. Chem. Phys 154 094102 (2021)  https://doi.org/10.1063/5.0038408
 
         thermo_weight : torch.tensor, n, n = observations
-            thermodynamic weights for each trajectory frame
+            thermodynamic weights for each trajectory frame corresopnding to Boltzmann factor of the bias potential
+            representing a state reweighting from the simulation to the target Hamiltonian for that single frame;
+            thermo_weight(x) = exp(-beta*U_bias(x)) [Formally thermo_weight(x) = exp(-beta*U_bias(x)) * Z_sim/Z_target
+            but partition function ratio is a constant that cancels either side of VAC generalized eigenproblem]
 
         Return
         ------
@@ -518,15 +627,42 @@ class Snrv(nn.Module):
         C11 = torch.zeros(self.output_size, self.output_size, device=self.device)
 
         self.eval()
-        with torch.no_grad():
-            for x_t0_batch, x_tt_batch, pathweight_batch in self._train_loader:
-                x_t0_batch = x_t0_batch.to(self.device)
-                x_tt_batch = x_tt_batch.to(self.device)
-                pathweight_batch = pathweight_batch.to(self.device)
-                z_t0_batch, z_tt_batch = self(x_t0_batch, x_tt_batch)
-                C00, C01, C10, C11 = accumulate_correlation_matrices(
-                    z_t0_batch, z_tt_batch, pathweight_batch, C00, C01, C10, C11
-                )
+
+        if not self.use_Koopman:
+
+            # memory efficient implementation that accumulates CXX batchwise
+            with torch.no_grad():
+                for x_t0_batch, x_tt_batch, pathweight_batch in self._train_loader:
+                    x_t0_batch = x_t0_batch.to(self.device)
+                    x_tt_batch = x_tt_batch.to(self.device)
+                    pathweight_batch = pathweight_batch.to(self.device)
+                    z_t0_batch, z_tt_batch = self(x_t0_batch, x_tt_batch)
+                    C00, C01, C10, C11 = accumulate_correlation_matrices(
+                        z_t0_batch, z_tt_batch, pathweight_batch, C00, C01, C10, C11
+                    )
+
+        else:
+
+            # memory inefficient implementation demanded by single-shot rather than batchwise Koopman eigenproblem;
+            # requires explict access to z_t0, z_tt, and pathweight for all data
+            z_t0 = torch.zeros((0, self.output_size), device=self.device)
+            z_tt = torch.zeros((0, self.output_size), device=self.device)
+            pathweight = torch.zeros((0), device=self.device)
+
+            with torch.no_grad():
+                for x_t0_batch, x_tt_batch, pathweight_batch in self._train_loader:
+                    x_t0_batch = x_t0_batch.to(self.device)
+                    x_tt_batch = x_tt_batch.to(self.device)
+                    pathweight_batch = pathweight_batch.to(self.device)
+                    z_t0_batch, z_tt_batch = self(x_t0_batch, x_tt_batch)
+
+                    z_t0 = torch.cat((z_t0, z_t0_batch), 0)
+                    z_tt = torch.cat((z_tt, z_tt_batch), 0)
+                    pathweight = torch.cat((pathweight, pathweight_batch), 0)
+
+            C00, C01, _, _ = accumulate_correlation_matrices(z_t0, z_tt, pathweight, C00, C01, C10, C11)
+
+            C00, C01, C10, C11 = self._apply_Koopman_reweighting(C00, C01, z_t0, z_tt, pathweight)
 
         if self.is_reversible:
 
@@ -537,11 +673,11 @@ class Snrv(nn.Module):
             Q = 0.5 * (C00 + C11)
             C = 0.5 * (C01 + C10)
 
-            # applying regularization (nugget regularization of unpopulated bins with pseudocounts)
+            # applying nugget regularization
             # Q += torch.eye(Q.size()[0], dtype=torch.float, requires_grad=False)*torch.finfo(torch.float32).eps
 
             # solving generalized eigenvalue problem Cv = wQv using Cholesky trick to enable backpropagation
-            # - column evecs are the expansion coefficients to assemble transfer operator eigenvector / singluar vector
+            # - column evecs are the expansion coefficients to assemble transfer operator eigenvector / singular vector
             # approximations from learned SNRV basis functions
             evals, expansion_coefficients = gen_eig_chol(C, Q)
 
@@ -751,6 +887,8 @@ class Snrv(nn.Module):
                 "batch_size": self.batch_size,
                 "VAMPdegree": self.VAMPdegree,
                 "is_reversible": self.is_reversible,
+                "num_workers": self.num_workers,
+                "use_Koopman": self.use_Koopman,
                 "evals": self.evals,
                 "expansion_coefficients": self.expansion_coefficients,
                 "network_weights": self.state_dict(),
@@ -810,6 +948,8 @@ def load_snrv(modelFilePath):
     batch_size = d["batch_size"]
     VAMPdegree = d["VAMPdegree"]
     is_reversible = d["is_reversible"]
+    num_workers = d["num_workers"]
+    use_Koopman = d["use_Koopman"]
 
     evals = d["evals"]
     expansion_coefficients = d["expansion_coefficients"]
@@ -830,6 +970,8 @@ def load_snrv(modelFilePath):
         batch_size=batch_size,
         VAMPdegree=VAMPdegree,
         is_reversible=is_reversible,
+        num_workers=num_workers,
+        use_Koopman=use_Koopman,
     )
 
     model.evals = evals
