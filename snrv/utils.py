@@ -73,12 +73,19 @@ def gen_eig_chol(C, Q):
     v : torch.tensor
         eigenvectors in non-ascending order
     """
-    #assert torch.allclose(C, C.t(), atol=1e-6)
-    #assert torch.allclose(Q, Q.t(), atol=1e-6)
+    # assert torch.allclose(C, C.t(), atol=1e-6)
+    # assert torch.allclose(Q, Q.t(), atol=1e-6)
 
     # Cholesky
     # N.B. torch.linalg.cholesky checks for Hermitian matrix automatically and throws runtime error if violated
-    L = torch.linalg.cholesky(Q)
+    try:
+        L = torch.linalg.cholesky(Q)
+    except RuntimeError:
+        raise ValueError(
+            """Q matrix is not positive semi-definite. Try reducing the learning rate
+             or asking for fewer CVs (decreasing output_size)"""
+        )
+
     Linv = torch.linalg.inv(L)
     LTinv = torch.linalg.inv(L.t())
 
