@@ -200,6 +200,7 @@ class Snrv(nn.Module):
         self.evals = None
         self.expansion_coefficients = None
         self.expansion_coefficients_right = None
+        self._use_extended_koopman_bases = True
 
     def forward(self, x_t0, x_tt):
         """
@@ -272,7 +273,9 @@ class Snrv(nn.Module):
         )
 
         if self.use_Koopman:
-            C00, C01, C10, C11 = self._apply_Koopman_reweighting(C00, C01, z_t0, z_tt, pathweight)
+            C00, C01, C10, C11 = self._apply_Koopman_reweighting(
+                C00, C01, z_t0, z_tt, pathweight
+            )
 
         if self.is_reversible:
 
@@ -345,7 +348,7 @@ class Snrv(nn.Module):
 
         pathweight : float tensor, n = observations
             pathweights from Girsanov theorem between time lagged observations;
-            identically unity (no reweighting rqd) for target potential == simulation potential
+            identically unity (no reweighting rqd.) for target potential == simulation potential
 
         Return
         ------
@@ -361,55 +364,130 @@ class Snrv(nn.Module):
         C11 : torch.tensor, n_comp x n_comp
             correlation of z_tt with z_tt w/ Girsanov and Koopman reweighting
         """
-        # (1) non-reversible C00 and C01 under Girsanov reweighting provided as arguments
+        N = z_t0.shape[0]
 
-        # (2) solving Koopman eigenvalue problem for reweighting vector
+        # Goal is to solve eigendecomposition for: Q = (C00 / N)^{-1} @ [(C00 / N)^{-1]} @ (C01 / N)]^T @ (C00 / N)
+        # instead phrase as Q = R @ K @ R^{-1} where K = R^T @ (C00 / N) @ R such that (C00 / N)^{-1} = R @ R^T
+        # then first solve eigendecomposition for K = U @ diag(V) @ U^T so
+        # Q = R @ [U @ diag(V) @ U^T] @ R^T = (R @ U) @ diag(V) @ (R @ U)^{-1}
 
-        # - applying nugget regularization
-        C00 += torch.eye(C00.size()[0], dtype=torch.float, requires_grad=False) * torch.finfo(torch.float32).eps
-        # C01 += torch.eye(C01.size()[0], dtype=torch.float, requires_grad=False) * torch.finfo(torch.float32).eps
+        with torch.no_grad():
+            # Calculate mean-centered correlation matricies
+            # C00 = (X - X.mean(0)).T @ (X - X.mean(0)); C01 = (X - X.mean(0)).T @ (Y - X.mean(0)))
+            C00 = torch.zeros_like(C00)
+            C01 = torch.zeros_like(C00)
+            C10 = torch.zeros_like(C00)
+            C11 = torch.zeros_like(C00)
+            C00, C01, C10, C11 = accumulate_correlation_matrices(
+                z_t0 - z_t0.mean(0),
+                z_tt - z_t0.mean(0),
+                pathweight,
+                C00,
+                C01,
+                C10,
+                C11,
+            )
 
-        # - forming and solving Koopman eigenvalue problem
-        C00inv = torch.linalg.inv(C00)
-        P = C00inv @ C01.t() @ C00inv.t() @ C00
+            # Find the matrix R, such that (C00 / N)^{-1} = R @ R^T
+            assert torch.allclose(C00, C00.t(), atol=1e-6)
+            evals, evecs = torch.linalg.eigh(C00 / N)
 
-        evals_P, evecs_P = torch.linalg.eig(P)
+            # Sort eigenvalues & eigenvectors in descending order
+            idx = torch.argsort(torch.abs(evals), descending=True)
+            evals = evals[idx]
+            evecs = evecs[:, idx]
 
-        idx = torch.argsort(torch.real(evals_P), descending=True)
-        evals_P = evals_P[idx]
-        evecs_P = evecs_P[:, idx]
+            # rank reduction eliminating negative-valued eigenvalues
+            idx = torch.abs(evals) > torch.finfo(torch.float32).eps
+            evals = evals[idx]
+            evecs = evecs[:, idx]
 
-        # - checking and extracting leading eigenvector with unit eigenvalue and zero imaginary components
-        assert torch.isclose(torch.real(evals_P[0]), torch.tensor(1.), rtol=0., atol=0.1)
-        assert torch.isclose(torch.imag(evals_P[0]), torch.tensor(0.), rtol=0., atol=0.1)
+            # enforce canonical eigenvector signs
+            for j in range(evecs.shape[1]):
+                jj = torch.argmax(torch.abs(evecs[:, j]))
+                evecs[:, j] = evecs[:, j] * torch.sgn(evecs[jj, j])
 
-        assert torch.allclose(torch.imag(evecs_P[:, 0]), torch.zeros(evecs_P.size()[0]), rtol=0., atol=0.1)
+            # R = U @ diag(V^{-1/2})
+            R = evecs @ torch.diag(1 / evals.sqrt())
 
-        u = torch.real(evecs_P[:, 0])
+            # create matrix K = R^T @ (C00 / N) @ R
+            M = R.shape[1]
+            K = R.t() @ ((C01 / N) @ R)
 
-        # normalization not required -- amounts to multiplication of C00, C01 by a scalar
-        # u_norm = torch.ones(traj_indicator_0.shape[0]).t() @ torch.from_numpy(traj_indicator_0).float() @ u
-        # u /= u_norm
-        # assert torch.isclose(torch.sum(torch.from_numpy(traj_indicator_0).float() @ u), torch.tensor(1.))
+            if self._use_extended_koopman_bases:
+                # to ensure the basis can represent the constant eigenfunction we can construct
+                # K in an extended basis corresponding to adding an all-1 column to X:=[X, 1] and Y:=[Y, 1]
+                # the new final row will have the column sums of (Y - X.mean(0)) and the new column will be 0
+                # except along the diagonal which will be 1
+                K = torch.vstack((K, (z_tt.mean(0) - z_t0.mean(0)) @ R))
+                ex1 = torch.zeros(M + 1, 1, device=z_t0.device)
+                ex1[M, 0] = 1.0
+                K = torch.hstack((K, ex1))
+                evals, evecs = torch.linalg.eig(K.t())
 
-        # (3) computing Koopman weights
-        koopweight = torch.matmul(z_t0, u)
+                # Select eigenvector with eigenvalue 1
+                if (torch.abs(evals) == 1.0).sum() > 1:
+                    # numerically multiple eigenvalues can register as equal to 1
+                    # in this case select the eigenvector with non-zero elements
+                    assert (torch.abs(evecs[-1, :]) > 0).sum() == 1
+                    mask = torch.abs(evecs[-1, :]) > 0
+                else:
+                    mask = torch.abs(evals) == 1.0
 
-        # - checking koopweight single signed and flipping to positive if necessary
-        assert torch.all(koopweight >= 0) or torch.all(koopweight <= 0)
-        if torch.all(koopweight <= 0):
-            koopweight = -koopweight
+                # Normalize u
+                u = torch.real(evecs[:, mask])
+                u = u / u[-1]
 
-        # (4) re-computing C00, C01, C10, C11 under Girsanov and Koopman reweighting
-        dim = z_t0.size()[1]
-        C00 = torch.zeros(dim, dim, device=self.device)
-        C01 = torch.zeros(dim, dim, device=self.device)
-        C10 = torch.zeros(dim, dim, device=self.device)
-        C11 = torch.zeros(dim, dim, device=self.device)
+                # Construct u in the input basis
+                Nr = R.shape[0]
+                u_input = torch.zeros(Nr + 1, 1, device=z_t0.device)
+                u_input[:Nr] = R @ u[:-1].view(-1, 1)
+                u_input[Nr] = u[-1] - z_t0.mean(0) @ (R @ u[:-1])
+
+                # Calcaulte koopweights
+                koopweight = z_t0 @ u_input[:-1] + u_input[-1]
+                koopweight = koopweight.flatten()
+            else:
+                # eigenvalue problem without the extended basis
+                evals, evecs = torch.linalg.eig(K.t())
+                idx = torch.argsort(torch.abs(evals), descending=True)
+                evals = evals[idx]
+                evecs = evecs[:, idx]
+                u = torch.real(evecs[:, 0])
+                u_norm = torch.ones(N).t() @ z_t0 @ u
+                u = u / u_norm
+                koopweight = z_t0 @ u
+                koopweight = koopweight.flatten()
+
+            # Handle negative signed weights.
+            # formally all weights should be strictly positive,
+            # ill-conditioned/noise within a batch can cause negative weights that
+            # should be avoided to prevent numerical issues later on
+            if torch.any(koopweight < 0):
+                if torch.all(koopweight <= 0):
+                    # Flip sign of all koopweights if all are negative
+                    koopweight = -1.0 * koopweight
+                else:
+                    # else, flip signs of koopweights such that majority are positive
+                    if (koopweight < 0).sum() > (koopweight > 0).sum():
+                        koopweight = -1.0 * koopweight
+                    # Set all negative koopweights to zero
+                    koopweight[koopweight < 0] = 0
+
+        # reconstruct correlation matricies using koopweights
+        C00 = torch.zeros_like(C00)
+        C01 = torch.zeros_like(C00)
+        C10 = torch.zeros_like(C00)
+        C11 = torch.zeros_like(C00)
         C00, C01, C10, C11 = accumulate_correlation_matrices(
-            z_t0, z_tt, torch.multiply(pathweight, koopweight), C00, C01, C10, C11
+            z_t0,
+            z_tt,
+            pathweight * koopweight,
+            C00,
+            C01,
+            C10,
+            C11,
         )
-
         return C00, C01, C10, C11
 
     def _create_dataset(self, data, ln_dynamical_weight, thermo_weight):
@@ -660,9 +738,13 @@ class Snrv(nn.Module):
                     z_tt = torch.cat((z_tt, z_tt_batch), 0)
                     pathweight = torch.cat((pathweight, pathweight_batch), 0)
 
-            C00, C01, _, _ = accumulate_correlation_matrices(z_t0, z_tt, pathweight, C00, C01, C10, C11)
+            C00, C01, _, _ = accumulate_correlation_matrices(
+                z_t0, z_tt, pathweight, C00, C01, C10, C11
+            )
 
-            C00, C01, C10, C11 = self._apply_Koopman_reweighting(C00, C01, z_t0, z_tt, pathweight)
+            C00, C01, C10, C11 = self._apply_Koopman_reweighting(
+                C00, C01, z_t0, z_tt, pathweight
+            )
 
         if self.is_reversible:
 
@@ -724,7 +806,7 @@ class Snrv(nn.Module):
         """
 
         if self.is_fitted:
-            #with torch.no_grad(): # need grad for get_transform_Jacobian to function
+            # with torch.no_grad(): # need grad for get_transform_Jacobian to function
             data = data.to(self.device)
             z, _ = self(data, data)
             psi = torch.matmul(z, self.expansion_coefficients)
