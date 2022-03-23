@@ -78,8 +78,14 @@ def gen_eig_chol(C, Q):
 
     # Cholesky
     # N.B. torch.linalg.cholesky checks for Hermitian matrix automatically and throws runtime error if violated
-    
-    L = torch.linalg.cholesky(Q)
+    try:
+        L = torch.linalg.cholesky(Q)
+    except RuntimeError:
+        raise ValueError(
+            """Q matrix is not positive semi-definite. Try reducing the learning rate
+             or asking for fewer CVs (decreasing output_size)"""
+        )
+        
     Linv = torch.linalg.inv(L)
     LTinv = torch.linalg.inv(L.t())
 
