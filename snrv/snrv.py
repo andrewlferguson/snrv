@@ -75,6 +75,12 @@ class Snrv(nn.Module):
     num_workers : int, default = 8
         number of cpu workers to use for datalaoder
 
+    use_Koopman : bool, default = False
+        apply Koopman reweighting to approxiately reweight non-equilibrium data to equilibrium distribution
+        **N.B. Can be beneficial to pre-train a model w/out Koopman reweighting prior to turning this on in order
+        to get good initial basis function approximations, using Koopman reweighting in early stages of training can
+        lead to numerical instabilities**
+
     Attributes
     ----------
     self.device : str
@@ -136,6 +142,7 @@ class Snrv(nn.Module):
         VAMPdegree=2,
         is_reversible=True,
         num_workers=8,
+        use_Koopman=False,
     ):
 
         super().__init__()
@@ -157,12 +164,11 @@ class Snrv(nn.Module):
         self.batch_size = batch_size
         self.VAMPdegree = VAMPdegree
         self.is_reversible = is_reversible
-
-        # optimize number of workers for data loading
         if num_workers is None:
             self.num_workers = min(os.cpu_count(), 8)
         else:
             self.num_workers = num_workers
+        self.use_Koopman = use_Koopman
 
         # building SNRV encoder as simple feedforward ANN
         self.model = list()
@@ -194,6 +200,7 @@ class Snrv(nn.Module):
         self.evals = None
         self.expansion_coefficients = None
         self.expansion_coefficients_right = None
+        self._use_extended_koopman_bases = True
 
     def forward(self, x_t0, x_tt):
         """
@@ -265,6 +272,11 @@ class Snrv(nn.Module):
             z_t0, z_tt, pathweight, C00, C01, C10, C11
         )
 
+        if self.use_Koopman:
+            C00, C01, C10, C11 = self._apply_Koopman_reweighting(
+                C00, C01, z_t0, z_tt, pathweight
+            )
+
         if self.is_reversible:
 
             # VAC
@@ -274,7 +286,7 @@ class Snrv(nn.Module):
             Q = 0.5 * (C00 + C11)
             C = 0.5 * (C01 + C10)
 
-            # - applying regularization (nugget regularization of unpopulated bins with pseudocounts)
+            # - applying nugget regularization
             # Q += torch.eye(Q.size()[0], dtype=torch.float, requires_grad=False)*torch.finfo(torch.float32).eps
 
             # solving generalized eigenvalue problem Cv = wQv using Cholesky trick to enable backpropagation
@@ -305,6 +317,178 @@ class Snrv(nn.Module):
             loss = -(S ** self.VAMPdegree).sum()
 
         return loss
+
+    def _apply_Koopman_reweighting(self, C00, C01, z_t0, z_tt, pathweight):
+        """
+        re-compute C00, C01, C10, C11 under Koopman reweighting
+        Ref: Wu, Nüske, Paul, Klus, Koltai, and Noé J. Chem. Phys. 146 154104 (2017) 10.1063/1.4979344
+
+        Koopman reweighting proceeds in four steps:
+        (1) compute non-reversible/non-symmetrized C00 and C01; can be done w/ or w/out Girsanov reweighting:
+            w/out corresponds to equilibrium reweighting of simulation, w/ to equilibrium reweighting of Girsanov
+            reweighted simulation
+        (2) estimate reweighting vector as leading evec with unit eval of matrix
+            P = C00inv @ C01.t() @ C00inv.t() @ C00
+        (3) compute Koopman weights associated with each frame in trajectory
+        (4) re-compute C00, C01, C10, C11 under Girsanov and Koopman reweighting
+
+        Parameters
+        ----------
+        C00 : torch.tensor, n_comp x n_comp
+            correlation of z_t0 with z_t0 w/ Girsanov reweighting but w/out Koopman reweighting
+
+        C01 : torch.tensor, n_comp x n_comp
+            correlation of z_t0 with z_tt w/ Girsanov reweighting but w/out Koopman reweighting
+
+        z_t0 : torch.tensor, n x n_comp, n = observations, n_comp = number of basis functions produced by network
+            trajectory projected into basis functions learned by SNRV encoder
+
+        z_tt : torch.tensor, n x n_comp, n = observations, n_comp = number of basis functions produced by network
+            time-lagged trajectory of same length as trajectory projected into basis functions learned by SNRV encoder
+
+        pathweight : float tensor, n = observations
+            pathweights from Girsanov theorem between time lagged observations;
+            identically unity (no reweighting rqd.) for target potential == simulation potential
+
+        Return
+        ------
+        C00 : torch.tensor, n_comp x n_comp
+            correlation of z_t0 with z_t0 w/ Girsanov and Koopman reweighting
+
+        C01 : torch.tensor, n_comp x n_comp
+            correlation of z_t0 with z_tt w/ Girsanov and Koopman reweighting
+
+        C10 : torch.tensor, n_comp x n_comp
+            correlation of z_tt with z_t0 w/ Girsanov and Koopman reweighting
+
+        C11 : torch.tensor, n_comp x n_comp
+            correlation of z_tt with z_tt w/ Girsanov and Koopman reweighting
+        """
+        N = z_t0.shape[0]
+
+        # Goal is to solve eigendecomposition for: Q = (C00 / N)^{-1} @ [(C00 / N)^{-1]} @ (C01 / N)]^T @ (C00 / N)
+        # instead phrase as Q = R @ K @ R^{-1} where K = R^T @ (C00 / N) @ R such that (C00 / N)^{-1} = R @ R^T
+        # then first solve eigendecomposition for K = U @ diag(V) @ U^T so
+        # Q = R @ [U @ diag(V) @ U^T] @ R^T = (R @ U) @ diag(V) @ (R @ U)^{-1}
+
+        with torch.no_grad():
+            # Calculate mean-centered correlation matricies
+            # C00 = (X - X.mean(0)).T @ (X - X.mean(0)); C01 = (X - X.mean(0)).T @ (Y - X.mean(0)))
+            C00 = torch.zeros_like(C00)
+            C01 = torch.zeros_like(C00)
+            C10 = torch.zeros_like(C00)
+            C11 = torch.zeros_like(C00)
+            C00, C01, C10, C11 = accumulate_correlation_matrices(
+                z_t0 - z_t0.mean(0),
+                z_tt - z_t0.mean(0),
+                pathweight,
+                C00,
+                C01,
+                C10,
+                C11,
+            )
+
+            # Find the matrix R, such that (C00 / N)^{-1} = R @ R^T
+            assert torch.allclose(C00, C00.t(), atol=1e-6)
+            evals, evecs = torch.linalg.eigh(C00 / N)
+
+            # Sort eigenvalues & eigenvectors in descending order
+            idx = torch.argsort(torch.abs(evals), descending=True)
+            evals = evals[idx]
+            evecs = evecs[:, idx]
+
+            # rank reduction eliminating negative-valued eigenvalues
+            idx = torch.abs(evals) > torch.finfo(torch.float32).eps
+            evals = evals[idx]
+            evecs = evecs[:, idx]
+
+            # enforce canonical eigenvector signs
+            for j in range(evecs.shape[1]):
+                jj = torch.argmax(torch.abs(evecs[:, j]))
+                evecs[:, j] = evecs[:, j] * torch.sgn(evecs[jj, j])
+
+            # R = U @ diag(V^{-1/2})
+            R = evecs @ torch.diag(1 / evals.sqrt())
+
+            # create matrix K = R^T @ (C00 / N) @ R
+            M = R.shape[1]
+            K = R.t() @ ((C01 / N) @ R)
+
+            if self._use_extended_koopman_bases:
+                # to ensure the basis can represent the constant eigenfunction we can construct
+                # K in an extended basis corresponding to adding an all-1 column to X:=[X, 1] and Y:=[Y, 1]
+                # the new final row will have the column sums of (Y - X.mean(0)) and the new column will be 0
+                # except along the diagonal which will be 1
+                K = torch.vstack((K, (z_tt.mean(0) - z_t0.mean(0)) @ R))
+                ex1 = torch.zeros(M + 1, 1, device=z_t0.device)
+                ex1[M, 0] = 1.0
+                K = torch.hstack((K, ex1))
+                evals, evecs = torch.linalg.eig(K.t())
+
+                # Select eigenvector with eigenvalue 1
+                if (torch.abs(evals) == 1.0).sum() > 1:
+                    # numerically multiple eigenvalues can register as equal to 1
+                    # in this case select the eigenvector with non-zero elements
+                    assert (torch.abs(evecs[-1, :]) > 0).sum() == 1
+                    mask = torch.abs(evecs[-1, :]) > 0
+                else:
+                    mask = torch.abs(evals) == 1.0
+
+                # Normalize u
+                u = torch.real(evecs[:, mask])
+                u = u / u[-1]
+
+                # Construct u in the input basis
+                Nr = R.shape[0]
+                u_input = torch.zeros(Nr + 1, 1, device=z_t0.device)
+                u_input[:Nr] = R @ u[:-1].view(-1, 1)
+                u_input[Nr] = u[-1] - z_t0.mean(0) @ (R @ u[:-1])
+
+                # Calcaulte koopweights
+                koopweight = z_t0 @ u_input[:-1] + u_input[-1]
+                koopweight = koopweight.flatten()
+            else:
+                # eigenvalue problem without the extended basis
+                evals, evecs = torch.linalg.eig(K.t())
+                idx = torch.argsort(torch.abs(evals), descending=True)
+                evals = evals[idx]
+                evecs = evecs[:, idx]
+                u = torch.real(evecs[:, 0])
+                u_norm = torch.ones(N).t() @ z_t0 @ u
+                u = u / u_norm
+                koopweight = z_t0 @ u
+                koopweight = koopweight.flatten()
+
+            # Handle negative signed weights.
+            # formally all weights should be strictly positive,
+            # ill-conditioned/noise within a batch can cause negative weights that
+            # should be avoided to prevent numerical issues later on
+            if torch.any(koopweight < 0):
+                if torch.all(koopweight <= 0):
+                    # Flip sign of all koopweights if all are negative
+                    koopweight = -1.0 * koopweight
+                else:
+                    # else, flip signs of koopweights such that majority are positive
+                    if (koopweight < 0).sum() > (koopweight > 0).sum():
+                        koopweight = -1.0 * koopweight
+                    # Set all negative koopweights to zero
+                    koopweight[koopweight < 0] = 0
+
+        # reconstruct correlation matricies using koopweights
+        C00 = torch.zeros_like(C00)
+        C01 = torch.zeros_like(C00)
+        C10 = torch.zeros_like(C00)
+        C11 = torch.zeros_like(C00)
+        C00, C01, C10, C11 = accumulate_correlation_matrices(
+            z_t0,
+            z_tt,
+            pathweight * koopweight,
+            C00,
+            C01,
+            C10,
+            C11,
+        )
+        return C00, C01, C10, C11
 
     def _create_dataset(self, data, ln_dynamical_weight, thermo_weight):
         """
@@ -400,7 +584,10 @@ class Snrv(nn.Module):
             Ref.: Kieninger and Keller J. Chem. Phys 154 094102 (2021)  https://doi.org/10.1063/5.0038408
 
         thermo_weight : torch.tensor, n, n = observations
-            thermodynamic weights for each trajectory frame
+            thermodynamic weights for each trajectory frame corresopnding to Boltzmann factor of the bias potential
+            representing a state reweighting from the simulation to the target Hamiltonian for that single frame;
+            thermo_weight(x) = exp(-beta*U_bias(x)) [Formally thermo_weight(x) = exp(-beta*U_bias(x)) * Z_sim/Z_target
+            but partition function ratio is a constant that cancels either side of VAC generalized eigenproblem]
 
         Return
         ------
@@ -518,15 +705,46 @@ class Snrv(nn.Module):
         C11 = torch.zeros(self.output_size, self.output_size, device=self.device)
 
         self.eval()
-        with torch.no_grad():
-            for x_t0_batch, x_tt_batch, pathweight_batch in self._train_loader:
-                x_t0_batch = x_t0_batch.to(self.device)
-                x_tt_batch = x_tt_batch.to(self.device)
-                pathweight_batch = pathweight_batch.to(self.device)
-                z_t0_batch, z_tt_batch = self(x_t0_batch, x_tt_batch)
-                C00, C01, C10, C11 = accumulate_correlation_matrices(
-                    z_t0_batch, z_tt_batch, pathweight_batch, C00, C01, C10, C11
-                )
+
+        if not self.use_Koopman:
+
+            # memory efficient implementation that accumulates CXX batchwise
+            with torch.no_grad():
+                for x_t0_batch, x_tt_batch, pathweight_batch in self._train_loader:
+                    x_t0_batch = x_t0_batch.to(self.device)
+                    x_tt_batch = x_tt_batch.to(self.device)
+                    pathweight_batch = pathweight_batch.to(self.device)
+                    z_t0_batch, z_tt_batch = self(x_t0_batch, x_tt_batch)
+                    C00, C01, C10, C11 = accumulate_correlation_matrices(
+                        z_t0_batch, z_tt_batch, pathweight_batch, C00, C01, C10, C11
+                    )
+
+        else:
+
+            # memory inefficient implementation demanded by single-shot rather than batchwise Koopman eigenproblem;
+            # requires explict access to z_t0, z_tt, and pathweight for all data
+            z_t0 = torch.zeros((0, self.output_size), device=self.device)
+            z_tt = torch.zeros((0, self.output_size), device=self.device)
+            pathweight = torch.zeros((0), device=self.device)
+
+            with torch.no_grad():
+                for x_t0_batch, x_tt_batch, pathweight_batch in self._train_loader:
+                    x_t0_batch = x_t0_batch.to(self.device)
+                    x_tt_batch = x_tt_batch.to(self.device)
+                    pathweight_batch = pathweight_batch.to(self.device)
+                    z_t0_batch, z_tt_batch = self(x_t0_batch, x_tt_batch)
+
+                    z_t0 = torch.cat((z_t0, z_t0_batch), 0)
+                    z_tt = torch.cat((z_tt, z_tt_batch), 0)
+                    pathweight = torch.cat((pathweight, pathweight_batch), 0)
+
+            C00, C01, _, _ = accumulate_correlation_matrices(
+                z_t0, z_tt, pathweight, C00, C01, C10, C11
+            )
+
+            C00, C01, C10, C11 = self._apply_Koopman_reweighting(
+                C00, C01, z_t0, z_tt, pathweight
+            )
 
         if self.is_reversible:
 
@@ -537,11 +755,11 @@ class Snrv(nn.Module):
             Q = 0.5 * (C00 + C11)
             C = 0.5 * (C01 + C10)
 
-            # applying regularization (nugget regularization of unpopulated bins with pseudocounts)
+            # applying nugget regularization
             # Q += torch.eye(Q.size()[0], dtype=torch.float, requires_grad=False)*torch.finfo(torch.float32).eps
 
             # solving generalized eigenvalue problem Cv = wQv using Cholesky trick to enable backpropagation
-            # - column evecs are the expansion coefficients to assemble transfer operator eigenvector / singluar vector
+            # - column evecs are the expansion coefficients to assemble transfer operator eigenvector / singular vector
             # approximations from learned SNRV basis functions
             evals, expansion_coefficients = gen_eig_chol(C, Q)
 
@@ -588,7 +806,7 @@ class Snrv(nn.Module):
         """
 
         if self.is_fitted:
-            #with torch.no_grad(): # need grad for get_transform_Jacobian to function
+            # with torch.no_grad(): # need grad for get_transform_Jacobian to function
             data = data.to(self.device)
             z, _ = self(data, data)
             psi = torch.matmul(z, self.expansion_coefficients)
@@ -751,6 +969,8 @@ class Snrv(nn.Module):
                 "batch_size": self.batch_size,
                 "VAMPdegree": self.VAMPdegree,
                 "is_reversible": self.is_reversible,
+                "num_workers": self.num_workers,
+                "use_Koopman": self.use_Koopman,
                 "evals": self.evals,
                 "expansion_coefficients": self.expansion_coefficients,
                 "network_weights": self.state_dict(),
@@ -810,6 +1030,8 @@ def load_snrv(modelFilePath):
     batch_size = d["batch_size"]
     VAMPdegree = d["VAMPdegree"]
     is_reversible = d["is_reversible"]
+    num_workers = d["num_workers"]
+    use_Koopman = d["use_Koopman"]
 
     evals = d["evals"]
     expansion_coefficients = d["expansion_coefficients"]
@@ -830,6 +1052,8 @@ def load_snrv(modelFilePath):
         batch_size=batch_size,
         VAMPdegree=VAMPdegree,
         is_reversible=is_reversible,
+        num_workers=num_workers,
+        use_Koopman=use_Koopman,
     )
 
     model.evals = evals

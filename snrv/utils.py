@@ -85,7 +85,7 @@ def gen_eig_chol(C, Q):
             """Q matrix is not positive semi-definite. Try reducing the learning rate
              or asking for fewer CVs (decreasing output_size)"""
         )
-
+        
     Linv = torch.linalg.inv(L)
     LTinv = torch.linalg.inv(L.t())
 
@@ -154,6 +154,10 @@ def accumulate_correlation_matrices(z_t0, z_tt, pathweight, C00, C01, C10, C11):
     assert z_t0.size()[0] == z_tt.size()[0] == pathweight.size()[0]
     assert z_t0.size()[1] == z_tt.size()[1]
 
+    # Let R = diag(pathweight), R = R^T
+    # Let W = tile_vertical(pathweight)
+    # C01 = X^T * (R * Y) = (R * X)^T * Y = X^T * (W .* Y) = (W .* X)^T * Y
+    # - R version more elegant, W version less memory intensive
     W = torch.tile(torch.reshape(pathweight, (-1, 1)), (1, z_tt.size()[1]))
     z_tt_r = torch.multiply(W, z_tt)
     z_t0_r = torch.multiply(W, z_t0)
