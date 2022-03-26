@@ -143,6 +143,7 @@ class Snrv(nn.Module):
         is_reversible=True,
         num_workers=8,
         use_Koopman=False,
+        device=None
     ):
 
         super().__init__()
@@ -189,7 +190,7 @@ class Snrv(nn.Module):
         self.model = nn.Sequential(*self.model)
 
         # cached variables
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = device if device is not None else "cuda" if torch.cuda.is_available() else "cpu"
         self.is_fitted = False
         self._train_loader = None
         self._val_loader = None
@@ -201,6 +202,7 @@ class Snrv(nn.Module):
         self.expansion_coefficients = None
         self.expansion_coefficients_right = None
         self._use_extended_koopman_bases = True
+        self._use_expansion_coefficient_norm = True
 
     def forward(self, x_t0, x_tt):
         """
@@ -787,6 +789,12 @@ class Snrv(nn.Module):
             self.evals = S
             self.expansion_coefficients = U
             self.expansion_coefficients_right = V
+
+        # normalize s.t. column norms are 1
+        if self._use_expansion_coefficient_norm:
+            self.expansion_coefficients /= self.expansion_coefficients.norm(dim=0)
+            if self.expansion_coefficients_right is not None:
+                self.expansion_coefficients_right /= self.expansion_coefficients_right.norm(dim=0)
 
         return None
 
