@@ -792,9 +792,9 @@ class Snrv(nn.Module):
 
         # normalize s.t. column norms are 1
         if self._use_expansion_coefficient_norm:
-            self.expansion_coefficients /= self.expansion_coefficients.norm(dim=0)
+            self.expansion_coefficients = self.expansion_coefficients / self.expansion_coefficients.norm(dim=0)
             if self.expansion_coefficients_right is not None:
-                self.expansion_coefficients_right /= self.expansion_coefficients_right.norm(dim=0)
+                self.expansion_coefficients_right = self.expansion_coefficients / self.expansion_coefficients_right.norm(dim=0)
 
         return None
 
