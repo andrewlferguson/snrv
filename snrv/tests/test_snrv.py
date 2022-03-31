@@ -72,7 +72,7 @@ def test_fit():
 
     # fitting model
     lag_n = 10
-    model.fit(traj_x_featurized, lag_n)
+    model.fit(traj_x_featurized, lag_n, standardize=True)
 
     # final parameters
     params_after = copy.deepcopy(list(model.parameters()))

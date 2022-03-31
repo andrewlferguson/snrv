@@ -4,6 +4,7 @@ __all__ = [
     "stable_symmetric_inverse",
     "gen_eig_chol",
     "accumulate_correlation_matrices",
+    "Standardize"
 ]
 
 
@@ -85,7 +86,6 @@ def gen_eig_chol(C, Q):
             """Q matrix is not positive semi-definite. Try reducing the learning rate
              or asking for fewer CVs (decreasing output_size)"""
         )
-        
     Linv = torch.linalg.inv(L)
     LTinv = torch.linalg.inv(L.t())
 
@@ -167,3 +167,28 @@ def accumulate_correlation_matrices(z_t0, z_tt, pathweight, C00, C01, C10, C11):
     C11 += torch.matmul(z_tt.t(), z_tt_r)
 
     return C00, C01, C10, C11
+
+
+class Standardize(torch.nn.Module):
+    """
+    Standardize layer for shifting and scaling.
+    y = (x - mean) / (std + eps)
+
+    Parameters
+    ----------
+    mean : torch.tensor, data mean
+
+    std : torch.tensor, data standard deviation
+
+    eps : torch.tensor, optional, small offset value to avoid division by zero
+    """
+
+    def __init__(self, mean, stddev, eps=1e-9):
+        super(Standardize, self).__init__()
+        self.register_buffer("mean", mean)
+        self.register_buffer("stddev", stddev)
+        self.register_buffer("eps", torch.ones_like(stddev) * eps)
+
+    def forward(self, x):
+        y = (x - self.mean) / (self.stddev + self.eps)
+        return y
