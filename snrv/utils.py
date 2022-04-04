@@ -85,7 +85,7 @@ def gen_eig_chol(C, Q):
             """Q matrix is not positive semi-definite. Try reducing the learning rate
              or asking for fewer CVs (decreasing output_size)"""
         )
-        
+
     Linv = torch.linalg.inv(L)
     LTinv = torch.linalg.inv(L.t())
 

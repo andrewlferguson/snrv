@@ -143,7 +143,7 @@ class Snrv(nn.Module):
         is_reversible=True,
         num_workers=8,
         use_Koopman=False,
-        device=None
+        device=None,
     ):
 
         super().__init__()
@@ -190,7 +190,13 @@ class Snrv(nn.Module):
         self.model = nn.Sequential(*self.model)
 
         # cached variables
-        self.device = device if device is not None else "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = (
+            device
+            if device is not None
+            else "cuda"
+            if torch.cuda.is_available()
+            else "cpu"
+        )
         self.is_fitted = False
         self._train_loader = None
         self._val_loader = None
@@ -482,13 +488,7 @@ class Snrv(nn.Module):
         C10 = torch.zeros_like(C00)
         C11 = torch.zeros_like(C00)
         C00, C01, C10, C11 = accumulate_correlation_matrices(
-            z_t0,
-            z_tt,
-            pathweight * koopweight,
-            C00,
-            C01,
-            C10,
-            C11,
+            z_t0, z_tt, pathweight * koopweight, C00, C01, C10, C11,
         )
         return C00, C01, C10, C11
 
@@ -585,7 +585,7 @@ class Snrv(nn.Module):
             identically unity (no reweighting rqd) for target potential == simulation potential and code as None;
             Ref.: Kieninger and Keller J. Chem. Phys 154 094102 (2021)  https://doi.org/10.1063/5.0038408
 
-        thermo_weight : torch.tensor, n, n = observations
+        thermo_weight : torch.tensor, n, n = observations, default = None
             thermodynamic weights for each trajectory frame corresopnding to Boltzmann factor of the bias potential
             representing a state reweighting from the simulation to the target Hamiltonian for that single frame;
             thermo_weight(x) = exp(-beta*U_bias(x)) [Formally thermo_weight(x) = exp(-beta*U_bias(x)) * Z_sim/Z_target
@@ -792,9 +792,14 @@ class Snrv(nn.Module):
 
         # normalize s.t. column norms are 1
         if self._use_expansion_coefficient_norm:
-            self.expansion_coefficients = self.expansion_coefficients / self.expansion_coefficients.norm(dim=0)
+            self.expansion_coefficients = (
+                self.expansion_coefficients / self.expansion_coefficients.norm(dim=0)
+            )
             if self.expansion_coefficients_right is not None:
-                self.expansion_coefficients_right = self.expansion_coefficients / self.expansion_coefficients_right.norm(dim=0)
+                self.expansion_coefficients_right = (
+                    self.expansion_coefficients
+                    / self.expansion_coefficients_right.norm(dim=0)
+                )
 
         return None
 
@@ -843,7 +848,7 @@ class Snrv(nn.Module):
             identically unity (no reweighting rqd) for target potential == simulation potential and code as None;
             Ref.: Kieninger and Keller J. Chem. Phys 154 094102 (2021)  https://doi.org/10.1063/5.0038408
 
-        thermo_weight : torch.tensor, n, n = observations
+        thermo_weight : torch.tensor, n, n = observations, default = None
             thermodynamic weights for each trajectory frame
 
         Return
