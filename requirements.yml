@@ -11,4 +11,5 @@ dependencies:
   - pytorch=1.10
   - tqdm=4.62
   - pytest=6.2
+  - matplotlib=3.5.1
 prefix: /anaconda/envs/snrv
