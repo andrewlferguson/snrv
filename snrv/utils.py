@@ -82,8 +82,8 @@ def gen_eig_chol(C, Q):
         L = torch.linalg.cholesky(Q)
     except RuntimeError:
         raise ValueError(
-            """Q matrix is not positive semi-definite. Try reducing the learning rate
-             or asking for fewer CVs (decreasing output_size)"""
+            """Q matrix is not positive semi-definite. Try reducing the learning rate,
+             increasing the batch size or asking for fewer CVs (decreasing output_size)"""
         )
         
     Linv = torch.linalg.inv(L)
