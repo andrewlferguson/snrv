@@ -18,6 +18,7 @@ from snrv.utils import (
     accumulate_correlation_matrices,
     gen_eig_chol,
     stable_symmetric_inverse,
+    Standardize
 )
 
 __all__ = ["Snrv", "load_snrv"]
@@ -81,6 +82,9 @@ class Snrv(nn.Module):
         to get good initial basis function approximations, using Koopman reweighting in early stages of training can
         lead to numerical instabilities**
 
+    device : str or NoneType, default = None
+        device string, by default set to 'gpu' if torch.cuda.is_available() otherwise is 'cpu'
+
     Attributes
     ----------
     self.device : str
@@ -143,7 +147,7 @@ class Snrv(nn.Module):
         is_reversible=True,
         num_workers=8,
         use_Koopman=False,
-        device=None
+        device=None,
     ):
 
         super().__init__()
@@ -203,6 +207,7 @@ class Snrv(nn.Module):
         self.expansion_coefficients_right = None
         self._use_extended_koopman_bases = True
         self._use_expansion_coefficient_norm = True
+        self.standardize = None
 
     def forward(self, x_t0, x_tt):
         """
@@ -225,6 +230,11 @@ class Snrv(nn.Module):
             time-lagged trajectory of same length as trajectory projected into basis functions learned by SNRV encoder
         """
         assert x_tt.size()[0] == x_t0.size()[0]
+
+        # Normalize data if requested
+        if self.standardize and hasattr(self, 'scaler'):
+            x_t0 = self.scaler(x_t0)
+            x_tt = self.scaler(x_tt)
 
         # passing inputs through ANN to project into self.output_size basis vectors
         x_t0 = self.model(x_t0)
@@ -289,7 +299,7 @@ class Snrv(nn.Module):
             C = 0.5 * (C01 + C10)
 
             # - applying nugget regularization
-            # Q += torch.eye(Q.size()[0], dtype=torch.float, requires_grad=False)*torch.finfo(torch.float32).eps
+            # Q += torch.eye(Q.size()[0], dtype=torch.float, requires_grad=False) * torch.finfo(torch.float32).eps
 
             # solving generalized eigenvalue problem Cv = wQv using Cholesky trick to enable backpropagation
             evals, _ = gen_eig_chol(C, Q)
@@ -566,7 +576,7 @@ class Snrv(nn.Module):
         self.optimizer.zero_grad()
         return loss.item()
 
-    def fit(self, data, lag, ln_dynamical_weight=None, thermo_weight=None):
+    def fit(self, data, lag, ln_dynamical_weight=None, thermo_weight=None, standardize=False):
         """
         fit SNRV model to data
 
@@ -590,6 +600,9 @@ class Snrv(nn.Module):
             representing a state reweighting from the simulation to the target Hamiltonian for that single frame;
             thermo_weight(x) = exp(-beta*U_bias(x)) [Formally thermo_weight(x) = exp(-beta*U_bias(x)) * Z_sim/Z_target
             but partition function ratio is a constant that cancels either side of VAC generalized eigenproblem]
+
+        standardize : bool, default = False
+            apply standardization  by removing mean and scaling to unit standard deviation
 
         Return
         ------
@@ -623,7 +636,18 @@ class Snrv(nn.Module):
         assert isinstance(lag, int) and lag >= 1
 
         self.lag = lag
+        self.standardize = standardize
         self._create_dataset(data, ln_dynamical_weight, thermo_weight)
+        if self.standardize:
+            # calculate data mean and std from x_0
+            for i, (x_batch, _, _) in tqdm(enumerate(self._train_loader), total=len(self._train_loader), leave=False, desc='Calculating data mean and std'):
+                if i == 0:
+                    x_all = x_batch
+                else:
+                    x_all = torch.cat((x_all, x_batch), 0)
+            std, mean = torch.std_mean(x_all, 0)
+            self.scaler = Standardize(mean, std)
+
         self.optimizer = optim.Adam(
             self.parameters(), lr=self.lr, weight_decay=self.weight_decay
         )
@@ -823,7 +847,7 @@ class Snrv(nn.Module):
 
         return psi
 
-    def fit_transform(self, data, lag, ln_dynamical_weight=None, thermo_weight=None):
+    def fit_transform(self, data, lag, ln_dynamical_weight=None, thermo_weight=None, standardize=False):
         """
         fit SNRV over data then project data into learned eigenvector (VAC) / singular vectors (VAMP)
         of transfer operator
@@ -845,6 +869,9 @@ class Snrv(nn.Module):
 
         thermo_weight : torch.tensor, n, n = observations
             thermodynamic weights for each trajectory frame
+
+        standardize : bool, default = False
+            apply standardization  by removing mean and scaling to unit standard deviation
 
         Return
         ------
@@ -886,6 +913,7 @@ class Snrv(nn.Module):
             self.lag,
             ln_dynamical_weight=ln_dynamical_weight,
             thermo_weight=thermo_weight,
+            standardize=standardize
         )
         psi = self.transform(data)
 
