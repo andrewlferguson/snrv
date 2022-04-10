@@ -14,6 +14,7 @@ def implied_timescales(
     thermo_weight=None,
     random_seed=42,
     cross_validation_folds=-1,
+    cross_validation_type="k-fold",
 ):
     """
     Compute implied timescales for a SNRV model object at different lag times.
@@ -59,8 +60,18 @@ def implied_timescales(
 
     cross_validation_folds : int, default = -1
         number of cross validation folds used to estimate uncertainty in the timescales. By default is -1, in which
-        case no cross-validation is performed. All available data is used to estimate the timescale mean, while
-        timescales corresponding to each data fold are also output.
+        case no cross validation is performed. All available data is used to estimate the timescale mean, while
+        `cross_vaidation_folds` number of models are also trained to determine uncertainty in the timescales. The
+        type of cross validation that is performed is determined by the `cross_validation_type` argument.
+
+    cross_validation_type : str, default = 'k-fold'
+        type of cross validation to perform, must be one of 'k-fold', 'bootstrap' or 'random seed'. Only relevant if
+        `cross_validation_folds` > 1. By default is 'k-fold', in which case standard k-fold cross validation is
+        performed where data is split into k=`cross_validation_folds` contiguous partitions and k separate models are
+        trained by omitting one of the partitions and training on the remaining k-1 data splits. If is 'bootstrap', k
+        separate models are still trained but each model is trained on a random selection (with replacement) of the k
+        data splits. If is `random seed`, k separate models are trained with different random seeds to estimate the
+        uncertainty due to training.
 
     Return
     ------
@@ -84,6 +95,14 @@ def implied_timescales(
             for no cross validation to be performed.
             """
         )
+    if cross_validation_type.lower() not in ["k-fold", "bootstrap", "random seed"]:
+        raise ValueError(
+            "cross_validation_type must be one of 'k-fold', 'bootstrap', 'random seed'"
+        )
+    cross_validation_type = cross_validation_type.lower()
+    if cross_validation_type == "random seed":
+        np.random.seed(random_seed)
+        cv_seeds = np.random.randint(2 ** 32 - 1, size=cross_validation_folds)
 
     if cross_validation_folds != -1:
         timescales_cv_folds = list()
@@ -114,39 +133,67 @@ def implied_timescales(
 
         if cross_validation_folds != -1:
             timescale_cv = list()
-            for _ in range(cross_validation_folds):
-                fold_idxs = np.random.choice(
-                    cross_validation_folds, size=cross_validation_folds, replace=True,
-                )
-                if isinstance(data, torch.Tensor):
-                    idxs = [cv_idxs[n * cv_size : (n + 1) * cv_size] for n in fold_idxs]
-                    cv_data = [data[i] for i in idxs]
-                    cv_ln_dynamical_weight = (
-                        [ln_dynamical_weight[i] for i in idxs]
-                        if ln_dynamical_weight is not None
-                        else None
-                    )
-                    cv_thermo_weight = (
-                        [thermo_weight[i] for i in idxs]
-                        if thermo_weight is not None
-                        else None
-                    )
-                elif isinstance(data, list):
-                    idxs = [
-                        torch.cat([inds[n * size : (n + 1) * size] for n in fold_idxs])
-                        for inds, size in zip(cv_idxs, cv_size)
-                    ]
-                    cv_data = [d[inds] for d, inds in zip(data, idxs)]
-                    cv_ln_dynamical_weight = (
-                        [w[inds] for w, inds in zip(ln_dynamical_weight, idxs)]
-                        if ln_dynamical_weight is not None
-                        else None
-                    )
-                    cv_thermo_weight = (
-                        [w[inds] for w, inds in zip(thermo_weight, idxs)]
-                        if thermo_weight is not None
-                        else None
-                    )
+            for cv_i in range(cross_validation_folds):
+
+                if cross_validation_type == "random seed":
+                    np.random.seed(cv_seeds[cv_i])
+                    torch.manual_seed(cv_seeds[cv_i])
+                    cv_data = data
+                    cv_ln_dynamical_weight = ln_dynamical_weight
+                    cv_thermo_weight = thermo_weight
+                else:
+                    if cross_validation_type == "k-fold":
+                        fold_idxs = np.arange(cross_validation_folds)
+                        fold_idxs = np.delete(fold_idxs, cv_i)
+                    elif cross_validation_type == "bootstrap":
+                        fold_idxs = np.random.choice(
+                            cross_validation_folds,
+                            size=cross_validation_folds,
+                            replace=True,
+                        )
+                    if isinstance(data, torch.Tensor):
+                        idxs = [
+                            cv_idxs[n * cv_size : (n + 1) * cv_size] for n in fold_idxs
+                        ]
+                        cv_data = [data[i] for i in idxs]
+                        cv_ln_dynamical_weight = (
+                            [ln_dynamical_weight[i] for i in idxs]
+                            if ln_dynamical_weight is not None
+                            else None
+                        )
+                        cv_thermo_weight = (
+                            [thermo_weight[i] for i in idxs]
+                            if thermo_weight is not None
+                            else None
+                        )
+                    elif isinstance(data, list):
+                        idxs = [
+                            [inds[n * size : (n + 1) * size] for n in fold_idxs]
+                            for inds, size in zip(cv_idxs, cv_size)
+                        ]
+                        cv_data = _flatten_list(
+                            [[d[i] for i in inds] for d, inds in zip(data, idxs)]
+                        )
+                        cv_ln_dynamical_weight = (
+                            _flatten_list(
+                                [
+                                    [w[i] for i in inds]
+                                    for w, inds in zip(ln_dynamical_weight, idxs)
+                                ]
+                            )
+                            if ln_dynamical_weight is not None
+                            else None
+                        )
+                        cv_thermo_weight = (
+                            _flatten_list(
+                                [
+                                    [w[i] for i in inds]
+                                    for w, inds in zip(thermo_weight, idxs)
+                                ]
+                            )
+                            if thermo_weight is not None
+                            else None
+                        )
 
                 model_train = deepcopy(model)
 
@@ -172,3 +219,7 @@ def implied_timescales(
         return timescales, timescales_cv_folds
     else:
         return timescales
+
+
+def _flatten_list(t):
+    return [item for sublist in t for item in sublist]
