@@ -119,26 +119,21 @@ def implied_timescales(
                     cross_validation_folds, size=cross_validation_folds, replace=True,
                 )
                 if isinstance(data, torch.Tensor):
-                    idxs = torch.cat(
-                        [cv_idxs[n * cv_size : (n + 1) * cv_size] for n in fold_idxs]
-                    )
-                    cv_data = data[idxs]
+                    idxs = [cv_idxs[n * cv_size : (n + 1) * cv_size] for n in fold_idxs]
+                    cv_data = [data[i] for i in idxs]
                     cv_ln_dynamical_weight = (
-                        ln_dynamical_weight[idxs]
+                        [ln_dynamical_weight[i] for i in idxs]
                         if ln_dynamical_weight is not None
                         else None
                     )
                     cv_thermo_weight = (
-                        thermo_weight[idxs] if thermo_weight is not None else None
+                        [thermo_weight[i] for i in idxs]
+                        if thermo_weight is not None
+                        else None
                     )
                 elif isinstance(data, list):
                     idxs = [
-                        torch.cat(
-                            [
-                                cv_idxs[n * cv_size : (n + 1) * cv_size]
-                                for n in fold_idxs
-                            ]
-                        )
+                        torch.cat([inds[n * size : (n + 1) * size] for n in fold_idxs])
                         for inds, size in zip(cv_idxs, cv_size)
                     ]
                     cv_data = [d[inds] for d, inds in zip(data, idxs)]
