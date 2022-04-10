@@ -59,8 +59,8 @@ def implied_timescales(
 
     cross_validation_folds : int, default = -1
         number of cross validation folds used to estimate uncertainty in the timescales. By default is -1, in which
-        case no cross-validation is performed. All available data is used to estimate the timescale mean, while timescales
-        corresponding to each data fold are also output.
+        case no cross-validation is performed. All available data is used to estimate the timescale mean, while
+        timescales corresponding to each data fold are also output.
 
     Return
     ------
@@ -69,8 +69,8 @@ def implied_timescales(
         is omitted.
 
     timescales_cv_folds: np.ndarray, n_lags x cross_validation_folds x (output_size - 1)
-        only returned if cross_validation_folds > 1. Implied timescales calcaulted for each lagtime for each cross validation
-        fold. First timescale corresponding to the stationary process is omitted.
+        only returned if cross_validation_folds > 1. Implied timescales calcaulted for each lagtime for each cross
+        validation fold. First timescale corresponding to the stationary process is omitted.
     """
 
     if (
@@ -80,8 +80,8 @@ def implied_timescales(
     ):
         raise ValueError(
             """
-            Number of cross_validation_folds must be greater than 1 to perform cross validation, or equal to -1 for no cross
-            validation to be performed.
+            Number of cross_validation_folds must be greater than 1 to perform cross validation, or equal to -1
+            for no cross validation to be performed.
             """
         )
 
@@ -114,14 +114,13 @@ def implied_timescales(
 
         if cross_validation_folds != -1:
             timescale_cv = list()
-            for i in range(cross_validation_folds):
+            for _ in range(cross_validation_folds):
+                fold_idxs = np.random.choice(
+                    cross_validation_folds, size=cross_validation_folds, replace=True,
+                )
                 if isinstance(data, torch.Tensor):
                     idxs = torch.cat(
-                        [
-                            idx.view(-1)
-                            for idx in cv_idxs
-                            if idx not in cv_idxs[i * cv_size : (i + 1) * cv_size]
-                        ]
+                        [cv_idxs[n * cv_size : (n + 1) * cv_size] for n in fold_idxs]
                     )
                     cv_data = data[idxs]
                     cv_ln_dynamical_weight = (
@@ -136,9 +135,8 @@ def implied_timescales(
                     idxs = [
                         torch.cat(
                             [
-                                idx.view(-1)
-                                for idx in inds
-                                if idx not in inds[i * size : (i + 1) * size]
+                                cv_idxs[n * cv_size : (n + 1) * cv_size]
+                                for n in fold_idxs
                             ]
                         )
                         for inds, size in zip(cv_idxs, cv_size)
