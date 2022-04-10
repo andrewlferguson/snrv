@@ -14,6 +14,7 @@ State-free (non-)reversible VAMPnets
 * scipy
 * torch
 * tqdm
+* matplotlib
 
 ### Environments
 
