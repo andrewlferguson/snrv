@@ -295,7 +295,10 @@ class Snrv(nn.Module):
             C = 0.5 * (C01 + C10)
 
             # - applying nugget regularization
-            # Q += torch.eye(Q.size()[0], dtype=torch.float, requires_grad=False)*torch.finfo(torch.float32).eps
+            # Q += (
+            #     torch.eye(Q.size()[0], dtype=torch.float, requires_grad=False)
+            #     * torch.finfo(torch.float32).eps
+            # )
 
             # solving generalized eigenvalue problem Cv = wQv using Cholesky trick to enable backpropagation
             evals, _ = gen_eig_chol(C, Q)
