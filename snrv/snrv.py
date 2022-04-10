@@ -819,6 +819,8 @@ class Snrv(nn.Module):
             self.expansion_coefficients_right = V
 
         # normalize s.t. column norms are 1
+        # note that this normalization can accenuate minor fluctuations in the leading eigenvector
+        # corresponding to the stationary process, making it appear noticibly non-constant
         if self._use_expansion_coefficient_norm:
             self.expansion_coefficients = (
                 self.expansion_coefficients / self.expansion_coefficients.norm(dim=0)
