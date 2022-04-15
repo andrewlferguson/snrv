@@ -205,7 +205,7 @@ def set_random_seed(seed=42):
     ----------
     seed : int, default = 42, the random seed to be set
     """
-    print(f"Fixing random seed to {seed}")
+    print(f"Setting random seed to {seed}")
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
