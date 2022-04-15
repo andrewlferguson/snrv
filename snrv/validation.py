@@ -2,6 +2,8 @@ import numpy as np
 import torch
 from copy import deepcopy
 
+from snrv.utils import set_random_seed
+
 
 __all__ = ["implied_timescales"]
 
@@ -102,7 +104,9 @@ def implied_timescales(
     cross_validation_type = cross_validation_type.lower()
     if cross_validation_type == "random seed":
         np.random.seed(random_seed)
-        cv_seeds = np.random.randint(2 ** 32 - 1, size=cross_validation_folds)
+        cv_seeds = np.random.randint(
+            np.iinfo(np.uint32).max, size=cross_validation_folds
+        )
 
     if cross_validation_folds != -1:
         timescales_cv_folds = list()
@@ -117,8 +121,7 @@ def implied_timescales(
     timescales = list()
 
     for lag in lags:
-        np.random.seed(random_seed)
-        torch.manual_seed(random_seed)
+        set_random_seed(random_seed)
 
         model_train = deepcopy(model)
 
@@ -136,8 +139,7 @@ def implied_timescales(
             for cv_i in range(cross_validation_folds):
 
                 if cross_validation_type == "random seed":
-                    np.random.seed(cv_seeds[cv_i])
-                    torch.manual_seed(cv_seeds[cv_i])
+                    set_random_seed(cv_seeds[cv_i])
                     cv_data = data
                     cv_ln_dynamical_weight = ln_dynamical_weight
                     cv_thermo_weight = thermo_weight

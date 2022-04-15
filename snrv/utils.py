@@ -1,10 +1,13 @@
 import torch
+import random
+import numpy as np
 
 __all__ = [
     "stable_symmetric_inverse",
     "gen_eig_chol",
     "accumulate_correlation_matrices",
-    "Standardize"
+    "Standardize",
+    "set_random_seed",
 ]
 
 
@@ -192,3 +195,18 @@ class Standardize(torch.nn.Module):
     def forward(self, x):
         y = (x - self.mean) / (self.stddev + self.eps)
         return y
+
+
+def set_random_seed(seed=42):
+    """
+    Sets the random seed across random number generators in pytorch, numpy, and python.random
+
+    Parameters
+    ----------
+    seed : int, default = 42, the random seed to be set
+    """
+    print(f"Fixing random seed to {seed}")
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
