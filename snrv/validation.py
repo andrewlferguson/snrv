@@ -17,6 +17,7 @@ def implied_timescales(
     random_seed=42,
     cross_validation_folds=-1,
     cross_validation_type="k-fold",
+    save_models=None,
 ):
     """
     Compute implied timescales for a SNRV model object at different lag times.
@@ -74,6 +75,11 @@ def implied_timescales(
         separate models are still trained but each model is trained on a random selection (with replacement) of the k
         data splits. If is `random seed`, k separate models are trained with different random seeds to estimate the
         uncertainty due to training.
+
+    save_models : str, default = None
+        if to save intermediate models trained at each lag time. If a string is provided, models are saved with with
+        prepended filenames: f"{save_models}_lag_{lag}.pt", where {lag} corresponds to the lag time used to train the 
+        model. The default filenames aref "model_lag_{lag}.pt". Models trained for cross-validation are not saved.
 
     Return
     ------
@@ -133,6 +139,12 @@ def implied_timescales(
         )
         evals = model_train.evals.cpu().detach().numpy()
         timescales.append(-lag / np.log(evals))
+
+        if save_models is not None:
+            if isinstance(save_models, str):
+                model_train.save_model(f'{save_models}_lag_{lag}.pt')
+            else:
+                model_train.save_model(f'model_lag_{lag}.pt')
 
         if cross_validation_folds != -1:
             timescale_cv = list()

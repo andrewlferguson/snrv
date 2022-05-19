@@ -1021,6 +1021,8 @@ class Snrv(nn.Module):
                 "evals": self.evals,
                 "expansion_coefficients": self.expansion_coefficients,
                 "network_weights": self.state_dict(),
+                "standardize": self.standardize,
+                "lag": self.lag,
             },
             modelFilePath,
         )
@@ -1079,6 +1081,8 @@ def load_snrv(modelFilePath):
     is_reversible = d["is_reversible"]
     num_workers = d["num_workers"]
     use_Koopman = d["use_Koopman"]
+    standardize = d["standardize"]
+    lag = d["lag"]
 
     evals = d["evals"]
     expansion_coefficients = d["expansion_coefficients"]
@@ -1106,6 +1110,8 @@ def load_snrv(modelFilePath):
     model.evals = evals
     model.expansion_coefficients = expansion_coefficients
     model.load_weights(network_weights)
+    model.standardize = standardize
+    model.lag = lag
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
