@@ -64,6 +64,7 @@ def test_fit():
         batch_size=batch_size,
         VAMPdegree=VAMPdegree,
         is_reversible=is_reversible,
+        device=device
     )
     model = model.to(device)
 

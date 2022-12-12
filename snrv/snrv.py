@@ -650,7 +650,7 @@ class Snrv(nn.Module):
                 else:
                     x_all = torch.cat((x_all, x_batch), 0)
             std, mean = torch.std_mean(x_all, 0)
-            self.scaler = Standardize(mean, std)
+            self.scaler = Standardize(mean, std).to(self.device)
 
         self.optimizer = optim.Adam(
             self.parameters(), lr=self.lr, weight_decay=self.weight_decay
