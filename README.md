@@ -75,7 +75,7 @@ output_size = 2
 n_epochs = 25
 is_reversible = False
 
-model = Snrv(input_size, output_size, n_epochs=n_epochs, is_reversible=is_reversible)
+model = Snrv(input_size, output_size, n_epochs=n_epochs, is_reversible=is_reversible, device=device)
 model = model.to(device)
 
 # training model
@@ -86,7 +86,7 @@ model.fit(traj_x, lag)
 its = -lag / np.log(model.evals.cpu().detach().numpy())
 
 # projecting traj_x into transfer operator eigenvector approximations
-psi = model.transform(traj_x)
+psi = [model.transform(x) for x in traj_x] if isinstance(traj_x, list) else model.transform(traj_x)
 
 # saving and loading trained model
 model.save_model('model.pt')
