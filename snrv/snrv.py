@@ -18,7 +18,7 @@ from snrv.utils import (
     accumulate_correlation_matrices,
     gen_eig_chol,
     stable_symmetric_inverse,
-    Standardize
+    Standardize,
 )
 
 __all__ = ["Snrv", "load_snrv"]
@@ -238,7 +238,7 @@ class Snrv(nn.Module):
         assert x_tt.size()[0] == x_t0.size()[0]
 
         # Normalize data if requested
-        if self.standardize and hasattr(self, 'scaler'):
+        if self.standardize and hasattr(self, "scaler"):
             x_t0 = self.scaler(x_t0)
             x_tt = self.scaler(x_tt)
 
@@ -310,12 +310,11 @@ class Snrv(nn.Module):
             #     * torch.finfo(torch.float32).eps
             # )
 
-
             # solving generalized eigenvalue problem Cv = wQv using Cholesky trick to enable backpropagation
             evals, _ = gen_eig_chol(C, Q)
 
             # loss
-            loss = -(evals ** self.VAMPdegree).sum()
+            loss = -(evals**self.VAMPdegree).sum()
 
         else:
 
@@ -336,7 +335,7 @@ class Snrv(nn.Module):
             # V = torch.matmul(C11invhalf, VpT.t())
 
             # loss
-            loss = -(S ** self.VAMPdegree).sum()
+            loss = -(S**self.VAMPdegree).sum()
 
         return loss
 
@@ -502,7 +501,13 @@ class Snrv(nn.Module):
         C10 = torch.zeros_like(C00)
         C11 = torch.zeros_like(C00)
         C00, C01, C10, C11 = accumulate_correlation_matrices(
-            z_t0, z_tt, pathweight * koopweight, C00, C01, C10, C11,
+            z_t0,
+            z_tt,
+            pathweight * koopweight,
+            C00,
+            C01,
+            C10,
+            C11,
         )
         return C00, C01, C10, C11
 
@@ -530,7 +535,12 @@ class Snrv(nn.Module):
         self._val_loader : torch DataLoader
             validation data loader
         """
-        dataset = DatasetSnrv(data, self.lag, ln_dynamical_weight, thermo_weight)
+        dataset = DatasetSnrv(
+            data,
+            self.lag,
+            ln_dynamical_weight,
+            thermo_weight,
+        )
 
         n = len(dataset)
         train_size = int((1.0 - self.val_frac) * n)
@@ -580,7 +590,16 @@ class Snrv(nn.Module):
         self.optimizer.zero_grad()
         return loss.item()
 
-    def fit(self, data, lag, ln_dynamical_weight=None, thermo_weight=None, standardize=False):
+    def fit(
+        self,
+        data,
+        lag,
+        ln_dynamical_weight=None,
+        thermo_weight=None,
+        standardize=False,
+        scheduler=False,
+        noise_scheduler=None,
+    ):
         """
         fit SNRV model to data
 
@@ -607,6 +626,21 @@ class Snrv(nn.Module):
 
         standardize : bool, default = False
             apply standardization  by removing mean and scaling to unit standard deviation
+
+        scheduler : bool or float, default = False
+            apply an exponential learning rate scheduler during training. If False then no learning rate
+            schedule is applied. If set to float < 1 the learning rate is annealed by that factor each epoch.
+            E.g., for a value of `scheduler=0.9` the learning rate is annealed by a factor of `0.9` after each epoch.
+            Default value is False.
+
+        noise_scheduler : None or float, default = None
+            whether to add random noise to the data during training to help prevent overfitting. If None (default), then
+            no random noise is added during training. If set to a float, that value determines the initial magnitude
+            of the random noise added to the features. The initial noise magnitude is then annealed every epoch according
+            to the schedule `noise_scheduler / (1 + epoch #). E.g., for `noise_scheduler=0.1` the noise added to the data
+            in the first epoch will be sampled from the Normal distribution `0.1 * N(0, 1)`, in the second epoch the
+            noise magnitude will be sampled from `(0.1 / 2) * N(0, 1)`, and in the third epoch will be
+            `(0.1 / 3) * N(0, 1)`, etc...
 
         Return
         ------
@@ -644,7 +678,12 @@ class Snrv(nn.Module):
         self._create_dataset(data, ln_dynamical_weight, thermo_weight)
         if self.standardize:
             # calculate data mean and std from x_0
-            for i, (x_batch, _, _) in tqdm(enumerate(self._train_loader), total=len(self._train_loader), leave=False, desc='Calculating data mean and std'):
+            for i, (x_batch, _, _) in tqdm(
+                enumerate(self._train_loader),
+                total=len(self._train_loader),
+                leave=False,
+                desc="Calculating data mean and std",
+            ):
                 if i == 0:
                     x_all = x_batch
                 else:
@@ -655,6 +694,11 @@ class Snrv(nn.Module):
         self.optimizer = optim.Adam(
             self.parameters(), lr=self.lr, weight_decay=self.weight_decay
         )
+
+        if scheduler:
+            self.scheduler = torch.optim.lr_scheduler.ExponentialLR(
+                self.optimizer, gamma=scheduler
+            )
 
         training_losses = list()
         validation_losses = list()
@@ -670,10 +714,22 @@ class Snrv(nn.Module):
                     x_t0_batch = x_t0_batch.to(self.device)
                     x_tt_batch = x_tt_batch.to(self.device)
                     pathweight_batch = pathweight_batch.to(self.device)
-                    loss = self._train_step(x_t0_batch, x_tt_batch, pathweight_batch)
+
+                    if noise_scheduler is not None:
+                        noise = (
+                            noise_scheduler * torch.randn_like(x_t0_batch) / (1 + epoch)
+                        )
+                    else:
+                        noise = torch.zeros_like(x_t0_batch)
+
+                    loss = self._train_step(
+                        x_t0_batch + noise, x_tt_batch + noise, pathweight_batch
+                    )
                     train_losses.append(loss)
                 training_loss = float(np.mean(train_losses))
                 training_losses.append(training_loss)
+                if hasattr(self, "scheduler"):
+                    self.scheduler.step()
 
                 self.eval()
                 with torch.no_grad():
@@ -858,7 +914,16 @@ class Snrv(nn.Module):
 
         return psi
 
-    def fit_transform(self, data, lag, ln_dynamical_weight=None, thermo_weight=None, standardize=False):
+    def fit_transform(
+        self,
+        data,
+        lag,
+        ln_dynamical_weight=None,
+        thermo_weight=None,
+        standardize=False,
+        scheduler=False,
+        noise_scheduler=None,
+    ):
         """
         fit SNRV over data then project data into learned eigenvector (VAC) / singular vectors (VAMP)
         of transfer operator
@@ -883,6 +948,21 @@ class Snrv(nn.Module):
 
         standardize : bool, default = False
             apply standardization  by removing mean and scaling to unit standard deviation
+
+        scheduler : bool or float, default = False
+            apply an exponential learning rate scheduler during training. If False then no learning rate
+            schedule is applied. If set to float < 1 the learning rate is annealed by that factor each epoch.
+            E.g., for a value of `scheduler=0.9` the learning rate is annealed by a factor of `0.9` after each epoch.
+            Default value is False.
+
+        noise_scheduler : None or float, default = None
+            whether to add random noise to the data during training to help prevent overfitting. If None (default), then
+            no random noise is added during training. If set to a float, that value determines the initial magnitude
+            of the random noise added to the features. The initial noise magnitude is then annealed every epoch according
+            to the schedule `noise_scheduler / (1 + epoch #). E.g., for `noise_scheduler=0.1` the noise added to the data
+            in the first epoch will be sampled from the Normal distribution `0.1 * N(0, 1)`, in the second epoch the
+            noise magnitude will be sampled from `(0.1 / 2) * N(0, 1)`, and in the third epoch will be
+            `(0.1 / 3) * N(0, 1)`, etc...
 
         Return
         ------
@@ -924,7 +1004,9 @@ class Snrv(nn.Module):
             self.lag,
             ln_dynamical_weight=ln_dynamical_weight,
             thermo_weight=thermo_weight,
-            standardize=standardize
+            standardize=standardize,
+            scheduler=scheduler,
+            noise_scheduler=noise_scheduler,
         )
         psi = self.transform(data)
 

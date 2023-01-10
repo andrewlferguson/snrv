@@ -18,6 +18,9 @@ def implied_timescales(
     cross_validation_folds=-1,
     cross_validation_type="k-fold",
     save_models=None,
+    standardize=False,
+    scheduler=False,
+    noise_scheduler=None,
 ):
     """
     Compute implied timescales for a SNRV model object at different lag times.
@@ -27,12 +30,22 @@ def implied_timescales(
 
         t(lag) = -lag / log(eval)
 
-    Examples::
+    Example::
         >>> from snrv.validation import implied_timescales
         >>> from snrv.plots import plot_timescales
         >>> lags = [10, 100, 1000]
         >>> timescales = implied_timescale(snrv_model, lags, training_data)
         >>> plot_timescales(lags, timescales)
+
+    Or calculate implied timescales with uncertainties, by default performing k-fold
+    cross validation
+
+    Example::
+        >>> from snrv.validation import implied_timescales
+        >>> from snrv.plots import plot_timescales
+        >>> lags = [10, 100, 1000]
+        >>> timescales, timescales_cv = implied_timescale(snrv_model, lags, training_data, cross_validation_folds=5)
+        >>> plot_timescales(lags, timescales, timescales_cv)
 
     Parameters
     ----------
@@ -78,8 +91,26 @@ def implied_timescales(
 
     save_models : str, default = None
         if to save intermediate models trained at each lag time. If a string is provided, models are saved with with
-        prepended filenames: f"{save_models}_lag_{lag}.pt", where {lag} corresponds to the lag time used to train the 
+        prepended filenames: f"{save_models}_lag_{lag}.pt", where {lag} corresponds to the lag time used to train the
         model. The default filenames aref "model_lag_{lag}.pt". Models trained for cross-validation are not saved.
+
+    standardize : bool, default = False
+        apply standardization  by removing mean and scaling to unit standard deviation
+
+    scheduler : bool or float, default = False
+        apply an exponential learning rate scheduler during training. If False then no learning rate
+        schedule is applied. If set to float < 1 the learning rate is annealed by that factor each epoch.
+        E.g., for a value of `scheduler=0.9` the learning rate is annealed by a factor of `0.9` after each epoch.
+        Default value is False.
+
+    noise_scheduler : None or float, default = None
+        whether to add random noise to the data during training to help prevent overfitting. If None (default), then
+        no random noise is added during training. If set to a float, that value determines the initial magnitude
+        of the random noise added to the features. The initial noise magnitude is then annealed every epoch according
+        to the schedule `noise_scheduler / (1 + epoch #). E.g., for `noise_scheduler=0.1` the noise added to the data
+        in the first epoch will be sampled from the Normal distribution `0.1 * N(0, 1)`, in the second epoch the
+        noise magnitude will be sampled from `(0.1 / 2) * N(0, 1)`, and in the third epoch will be
+        `(0.1 / 3) * N(0, 1)`, etc...
 
     Return
     ------
@@ -136,15 +167,18 @@ def implied_timescales(
             lag,
             ln_dynamical_weight=ln_dynamical_weight,
             thermo_weight=thermo_weight,
+            standardize=standardize,
+            scheduler=scheduler,
+            noise_scheduler=noise_scheduler,
         )
         evals = model_train.evals.cpu().detach().numpy()
         timescales.append(-lag / np.log(evals))
 
         if save_models is not None:
             if isinstance(save_models, str):
-                model_train.save_model(f'{save_models}_lag_{lag}.pt')
+                model_train.save_model(f"{save_models}_lag_{lag}.pt")
             else:
-                model_train.save_model(f'model_lag_{lag}.pt')
+                model_train.save_model(f"model_lag_{lag}.pt")
 
         if cross_validation_folds != -1:
             timescale_cv = list()
@@ -216,6 +250,9 @@ def implied_timescales(
                     lag,
                     ln_dynamical_weight=cv_ln_dynamical_weight,
                     thermo_weight=cv_thermo_weight,
+                    standardize=standardize,
+                    scheduler=scheduler,
+                    noise_scheduler=noise_scheduler,
                 )
                 evals = model_train.evals.cpu().detach().numpy()
                 timescale_cv.append(-lag / np.log(evals))
